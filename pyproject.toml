@@ -21,3 +21,6 @@ fastapi = {extras = ["standard"], version = "^0.115.0"}
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.fastapi]
+entrypoint = "backend.app.main:app"
