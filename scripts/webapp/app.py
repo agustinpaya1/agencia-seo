@@ -1,30 +1,44 @@
-#!/usr/bin/env python3
-"""
-GEO-SEO CRM — REST API (Flask)
-Usage:
-    pip install flask flask-cors
-    python app.py
-    API will run on http://localhost:5050
-"""
-
 import json
-import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-import threading
 
-from flask import Flask, request, send_file, abort, jsonify
-from flask_cors import CORS
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-app = Flask(__name__)
-CORS(app)  # Allow cross-origin requests from Next.js
+app = FastAPI(title="GEO-SEO CRM API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 CRM_PATH = Path.home() / ".geo-prospects" / "prospects.json"
 PROPOSALS_DIR = Path.home() / ".geo-prospects" / "proposals"
 AUDITS_DIR = Path.home() / ".geo-prospects" / "audits"
 
+# ── Models ─────────────────────────────────────────────────────────────
+
+
+class NoteRequest(BaseModel):
+    text: str
+
+
+class StatusRequest(BaseModel):
+    status: str
+
+
+class AuditRequest(BaseModel):
+    url: str
+
+
 # ── Helpers ────────────────────────────────────────────────────────────
+
 
 def init_dirs():
     CRM_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +48,9 @@ def init_dirs():
         with open(CRM_PATH, "w") as f:
             json.dump([], f)
 
+
 init_dirs()
+
 
 def load_prospects() -> list[dict]:
     if not CRM_PATH.exists():
@@ -42,15 +58,21 @@ def load_prospects() -> list[dict]:
     with open(CRM_PATH) as f:
         return json.load(f)
 
+
 def save_prospects(prospects: list[dict]):
     with open(CRM_PATH, "w") as f:
         json.dump(prospects, f, indent=2, ensure_ascii=False)
 
+
 def score_tier(score: int) -> str:
-    if score >= 80: return "good"
-    if score >= 60: return "moderate"
-    if score >= 40: return "poor"
+    if score >= 80:
+        return "good"
+    if score >= 60:
+        return "moderate"
+    if score >= 40:
+        return "poor"
     return "critical"
+
 
 def crm_stats(prospects: list[dict]) -> dict:
     total = len(prospects)
@@ -58,7 +80,9 @@ def crm_stats(prospects: list[dict]) -> dict:
     proposals = [p for p in prospects if p.get("status") == "proposal"]
     mrr = sum(p.get("monthly_value", 0) for p in active)
     pipeline = sum(p.get("monthly_value", 0) for p in proposals)
-    avg_score = round(sum(p.get("geo_score", 0) for p in prospects) / total) if total else 0
+    avg_score = (
+        round(sum(p.get("geo_score", 0) for p in prospects) / total) if total else 0
+    )
     return {
         "total": total,
         "active": len(active),
@@ -68,21 +92,22 @@ def crm_stats(prospects: list[dict]) -> dict:
         "avg_tier": score_tier(avg_score),
     }
 
+
 def find_pdf(prospect: dict) -> Path | None:
     domain = prospect.get("domain", "")
     for f in sorted(PROPOSALS_DIR.glob(f"{domain}*.pdf"), reverse=True):
         return f
     return None
 
+
 # ── API Routes ─────────────────────────────────────────────────────────
 
-@app.route("/api/prospects", methods=["GET"])
-def get_prospects():
-    prospects = load_prospects()
-    status_filter = request.args.get("status", "")
-    sort = request.args.get("sort", "score")
 
-    filtered = [p for p in prospects if not status_filter or p.get("status") == status_filter]
+@app.get("/api/prospects")
+def get_prospects(status: str = "", sort: str = "score"):
+    prospects = load_prospects()
+
+    filtered = [p for p in prospects if not status or p.get("status") == status]
 
     if sort == "score":
         filtered.sort(key=lambda x: x.get("geo_score", 0))
@@ -92,88 +117,103 @@ def get_prospects():
         filtered.sort(key=lambda x: x.get("monthly_value", 0), reverse=True)
 
     stats = crm_stats(prospects)
-    
-    return jsonify({
-        "prospects": filtered,
-        "stats": stats
-    })
 
-@app.route("/api/prospects/<pid>", methods=["GET"])
-def get_prospect_detail(pid):
+    return {"prospects": filtered, "stats": stats}
+
+
+@app.get("/api/prospects/{pid}")
+def get_prospect_detail(pid: str):
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
-        abort(404)
+        raise HTTPException(status_code=404, detail="Prospect not found")
 
     p["has_pdf"] = find_pdf(p) is not None
-    return jsonify(p)
+    return p
 
-@app.route("/api/prospects/<pid>/note", methods=["POST"])
-def add_note(pid):
+
+@app.post("/api/prospects/{pid}/note")
+def add_note(pid: str, data: NoteRequest):
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
-        abort(404)
+        raise HTTPException(status_code=404, detail="Prospect not found")
 
-    data = request.json
-    text = data.get("text", "").strip() if data else ""
+    text = data.text.strip()
     if text:
         if "notes" not in p:
             p["notes"] = []
-        p["notes"].append({
-            "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-            "text": text,
-        })
+        p["notes"].append(
+            {
+                "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "text": text,
+            }
+        )
         p["updated_at"] = datetime.now().strftime("%Y-%m-%d")
         save_prospects(prospects)
 
-    return jsonify(p)
+    return p
 
-@app.route("/api/prospects/<pid>/status", methods=["PUT"])
-def update_status(pid):
+
+@app.put("/api/prospects/{pid}/status")
+def update_status(pid: str, data: StatusRequest):
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
-        abort(404)
+        raise HTTPException(status_code=404, detail="Prospect not found")
 
-    data = request.json
-    new_status = data.get("status", "").strip() if data else ""
+    new_status = data.status.strip()
     valid_statuses = ["lead", "audit", "proposal", "active", "churned", "lost"]
     if new_status in valid_statuses:
         p["status"] = new_status
         p["updated_at"] = datetime.now().strftime("%Y-%m-%d")
         save_prospects(prospects)
 
-    return jsonify(p)
+    return p
 
-@app.route("/api/prospects/<pid>/pdf", methods=["GET"])
-def download_pdf(pid):
+
+@app.get("/api/prospects/{pid}/pdf")
+def download_pdf(pid: str):
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
-        abort(404)
+        raise HTTPException(status_code=404, detail="Prospect not found")
 
     pdf_path = find_pdf(p)
     if not pdf_path:
-        abort(404)
+        raise HTTPException(status_code=404, detail="PDF not found")
 
-    return send_file(
-        pdf_path,
-        as_attachment=True,
-        download_name=pdf_path.name,
-        mimetype="application/pdf",
+    return FileResponse(
+        path=pdf_path, filename=pdf_path.name, media_type="application/pdf"
     )
 
-@app.route("/api/audit", methods=["POST"])
-def start_audit():
-    """Starts a new GEO audit for a given URL (Phase 2 Stub)"""
-    data = request.json
-    url = data.get("url", "").strip()
+
+def mock_audit_background(pid: str, domain: str):
+    import time
+
+    time.sleep(5)  # Simulate work
+    ps = load_prospects()
+    target = next((x for x in ps if x.get("id") == pid), None)
+    if target:
+        target["geo_score"] = 45  # mock result
+        target["status"] = "proposal"
+
+        # Create a dummy PDF to avoid 404s in the UI
+        dummy_pdf_path = PROPOSALS_DIR / f"{domain}_{pid}.pdf"
+        dummy_pdf_path.write_text("Dummy PDF content for testing")
+
+        save_prospects(ps)
+
+
+@app.post("/api/audit", status_code=202)
+def start_audit(data: AuditRequest, background_tasks: BackgroundTasks):
+    """Starts a new GEO audit for a given URL"""
+    url = data.url.strip()
     if not url:
-        return jsonify({"error": "URL is required"}), 400
+        raise HTTPException(status_code=400, detail="URL is required")
 
     domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-    
+
     # Create a new prospect in 'audit' status
     prospects = load_prospects()
     new_id = str(uuid.uuid4())[:8]
@@ -186,33 +226,25 @@ def start_audit():
         "monthly_value": 0,
         "audit_date": datetime.now().strftime("%Y-%m-%d"),
         "updated_at": datetime.now().strftime("%Y-%m-%d"),
-        "notes": [{"date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "text": "Auditoría iniciada automáticamente."}]
+        "notes": [
+            {
+                "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                "text": "Auditoría iniciada automáticamente.",
+            }
+        ],
     }
     prospects.append(p)
     save_prospects(prospects)
-    
-    # In Phase 2, this will spawn a background thread calling `geo audit` or the underlying scripts directly.
-    def mock_audit_background(pid):
-        import time
-        time.sleep(5) # Simulate work
-        ps = load_prospects()
-        target = next((x for x in ps if x.get("id") == pid), None)
-        if target:
-            target["geo_score"] = 45 # mock result
-            target["status"] = "proposal"
-            
-            # Create a dummy PDF to avoid 404s in the UI
-            dummy_pdf_path = PROPOSALS_DIR / f"{domain}_{pid}.pdf"
-            dummy_pdf_path.write_text("Dummy PDF content for testing")
-            
-            save_prospects(ps)
-            
-    threading.Thread(target=mock_audit_background, args=(new_id,)).start()
 
-    return jsonify({"message": "Audit started", "prospect": p}), 202
+    # Spawn background task
+    background_tasks.add_task(mock_audit_background, new_id, domain)
 
-# ── Run ─────────────────────────────────────────────────────────────────
+    return {"message": "Audit started", "prospect": p}
+
 
 if __name__ == "__main__":
-    debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
-    app.run(debug=debug, port=5050)
+    import uvicorn
+    import os
+
+    debug = os.environ.get("DEBUG", "false").lower() == "true"
+    uvicorn.run("app:app", host="127.0.0.1", port=5050, reload=debug)
