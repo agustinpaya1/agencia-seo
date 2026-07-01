@@ -1,0 +1,19 @@
+{
+  "name": "Agustín Payá - Agentic SEO",
+  "cover_tag": "Diagnóstico Crítico de Posicionamiento IA",
+  "website": "",
+  "phone": "",
+  "contact_name": "",
+  "colors": {
+    "primary":        "#06b6d4",
+    "primary_bright": "#22d3ee",
+    "secondary":      "#f97316",
+    "bg_deep":        "#020617",
+    "bg_dark":        "#0f172a",
+    "bg_card":        "#1e293b",
+    "border":         "#334155",
+    "text_primary":   "#f8fafc",
+    "text_secondary": "#94a3b8",
+    "text_accent":    "#06b6d4"
+  }
+}

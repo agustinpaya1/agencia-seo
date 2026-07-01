@@ -1,32 +1,40 @@
 #!/usr/bin/env python3
 """
-GEO-SEO CRM — Web UI (Flask + HTMX)
+GEO-SEO CRM — REST API (Flask)
 Usage:
-    pip install flask
+    pip install flask flask-cors
     python app.py
-    open http://localhost:5050
+    API will run on http://localhost:5050
 """
 
 import json
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
+import threading
 
-from flask import Flask, render_template, request, redirect, url_for, send_file, abort, jsonify
+from flask import Flask, request, send_file, abort, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
-
-
-@app.context_processor
-def inject_now():
-    return {"now": datetime.now().strftime("%Y-%m-%d %H:%M")}
+CORS(app)  # Allow cross-origin requests from Next.js
 
 CRM_PATH = Path.home() / ".geo-prospects" / "prospects.json"
 PROPOSALS_DIR = Path.home() / ".geo-prospects" / "proposals"
 AUDITS_DIR = Path.home() / ".geo-prospects" / "audits"
 
-
 # ── Helpers ────────────────────────────────────────────────────────────
+
+def init_dirs():
+    CRM_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROPOSALS_DIR.mkdir(parents=True, exist_ok=True)
+    AUDITS_DIR.mkdir(parents=True, exist_ok=True)
+    if not CRM_PATH.exists():
+        with open(CRM_PATH, "w") as f:
+            json.dump([], f)
+
+init_dirs()
 
 def load_prospects() -> list[dict]:
     if not CRM_PATH.exists():
@@ -44,17 +52,6 @@ def score_tier(score: int) -> str:
     if score >= 40: return "poor"
     return "critical"
 
-def score_label(score: int) -> str:
-    if score >= 80: return "Good"
-    if score >= 60: return "Moderate"
-    if score >= 40: return "Poor"
-    return "Critical"
-
-def format_eur(value) -> str:
-    if not value:
-        return "—"
-    return f"€{int(value):,}".replace(",", ".")
-
 def crm_stats(prospects: list[dict]) -> dict:
     total = len(prospects)
     active = [p for p in prospects if p.get("status") == "active"]
@@ -65,44 +62,22 @@ def crm_stats(prospects: list[dict]) -> dict:
     return {
         "total": total,
         "active": len(active),
-        "mrr": format_eur(mrr),
-        "pipeline": format_eur(pipeline),
+        "mrr": mrr,
+        "pipeline": pipeline,
         "avg_score": avg_score,
         "avg_tier": score_tier(avg_score),
     }
 
 def find_pdf(prospect: dict) -> Path | None:
-    """Find the PDF file for a prospect."""
     domain = prospect.get("domain", "")
     for f in sorted(PROPOSALS_DIR.glob(f"{domain}*.pdf"), reverse=True):
         return f
     return None
 
+# ── API Routes ─────────────────────────────────────────────────────────
 
-# ── Template filters ────────────────────────────────────────────────────
-
-app.jinja_env.filters["score_tier"] = score_tier
-app.jinja_env.filters["score_label"] = score_label
-app.jinja_env.filters["format_eur"] = format_eur
-
-STATUS_META = {
-    "lead":     {"icon": "⬜", "badge": "secondary",  "label": "Lead"},
-    "audit":    {"icon": "🔍", "badge": "warning",    "label": "Audit"},
-    "proposal": {"icon": "📄", "badge": "info",       "label": "Proposal"},
-    "active":   {"icon": "✅", "badge": "success",    "label": "Active"},
-    "churned":  {"icon": "❌", "badge": "danger",     "label": "Churned"},
-    "lost":     {"icon": "💀", "badge": "dark",       "label": "Lost"},
-}
-
-@app.template_filter("status_meta")
-def status_meta_filter(status: str) -> dict:
-    return STATUS_META.get(status, {"icon": "?", "badge": "secondary", "label": status})
-
-
-# ── Routes ─────────────────────────────────────────────────────────────
-
-@app.route("/")
-def dashboard():
+@app.route("/api/prospects", methods=["GET"])
+def get_prospects():
     prospects = load_prospects()
     status_filter = request.args.get("status", "")
     sort = request.args.get("sort", "score")
@@ -117,47 +92,31 @@ def dashboard():
         filtered.sort(key=lambda x: x.get("monthly_value", 0), reverse=True)
 
     stats = crm_stats(prospects)
-    statuses = list(STATUS_META.keys())
+    
+    return jsonify({
+        "prospects": filtered,
+        "stats": stats
+    })
 
-    return render_template(
-        "dashboard.html",
-        prospects=filtered,
-        stats=stats,
-        status_filter=status_filter,
-        sort=sort,
-        statuses=statuses,
-        STATUS_META=STATUS_META,
-    )
-
-
-@app.route("/prospect/<pid>")
-def prospect_detail(pid):
+@app.route("/api/prospects/<pid>", methods=["GET"])
+def get_prospect_detail(pid):
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
         abort(404)
 
-    pdf_path = find_pdf(p)
-    has_pdf = pdf_path is not None
+    p["has_pdf"] = find_pdf(p) is not None
+    return jsonify(p)
 
-    return render_template(
-        "prospect.html",
-        p=p,
-        has_pdf=has_pdf,
-        STATUS_META=STATUS_META,
-        statuses=list(STATUS_META.keys()),
-    )
-
-
-@app.route("/prospect/<pid>/note", methods=["POST"])
+@app.route("/api/prospects/<pid>/note", methods=["POST"])
 def add_note(pid):
-    """HTMX endpoint — returns updated notes fragment."""
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
         abort(404)
 
-    text = request.form.get("text", "").strip()
+    data = request.json
+    text = data.get("text", "").strip() if data else ""
     if text:
         if "notes" not in p:
             p["notes"] = []
@@ -168,28 +127,26 @@ def add_note(pid):
         p["updated_at"] = datetime.now().strftime("%Y-%m-%d")
         save_prospects(prospects)
 
-    return render_template("_notes.html", p=p)
+    return jsonify(p)
 
-
-@app.route("/prospect/<pid>/status", methods=["POST"])
+@app.route("/api/prospects/<pid>/status", methods=["PUT"])
 def update_status(pid):
-    """HTMX endpoint — update status, returns badge fragment."""
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
     if not p:
         abort(404)
 
-    new_status = request.form.get("status", "").strip()
-    if new_status in STATUS_META:
+    data = request.json
+    new_status = data.get("status", "").strip() if data else ""
+    valid_statuses = ["lead", "audit", "proposal", "active", "churned", "lost"]
+    if new_status in valid_statuses:
         p["status"] = new_status
         p["updated_at"] = datetime.now().strftime("%Y-%m-%d")
         save_prospects(prospects)
 
-    meta = STATUS_META.get(p["status"], {})
-    return f'<span class="badge bg-{meta["badge"]} fs-6">{meta["icon"]} {meta["label"]}</span>'
+    return jsonify(p)
 
-
-@app.route("/prospect/<pid>/pdf")
+@app.route("/api/prospects/<pid>/pdf", methods=["GET"])
 def download_pdf(pid):
     prospects = load_prospects()
     p = next((x for x in prospects if x.get("id") == pid), None)
@@ -207,6 +164,52 @@ def download_pdf(pid):
         mimetype="application/pdf",
     )
 
+@app.route("/api/audit", methods=["POST"])
+def start_audit():
+    """Starts a new GEO audit for a given URL (Phase 2 Stub)"""
+    data = request.json
+    url = data.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL is required"}), 400
+
+    domain = url.replace("https://", "").replace("http://", "").split("/")[0]
+    
+    # Create a new prospect in 'audit' status
+    prospects = load_prospects()
+    new_id = str(uuid.uuid4())[:8]
+    p = {
+        "id": new_id,
+        "company": domain.capitalize(),
+        "domain": domain,
+        "status": "audit",
+        "geo_score": 0,
+        "monthly_value": 0,
+        "audit_date": datetime.now().strftime("%Y-%m-%d"),
+        "updated_at": datetime.now().strftime("%Y-%m-%d"),
+        "notes": [{"date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), "text": "Auditoría iniciada automáticamente."}]
+    }
+    prospects.append(p)
+    save_prospects(prospects)
+    
+    # In Phase 2, this will spawn a background thread calling `geo audit` or the underlying scripts directly.
+    def mock_audit_background(pid):
+        import time
+        time.sleep(5) # Simulate work
+        ps = load_prospects()
+        target = next((x for x in ps if x.get("id") == pid), None)
+        if target:
+            target["geo_score"] = 45 # mock result
+            target["status"] = "proposal"
+            
+            # Create a dummy PDF to avoid 404s in the UI
+            dummy_pdf_path = PROPOSALS_DIR / f"{domain}_{pid}.pdf"
+            dummy_pdf_path.write_text("Dummy PDF content for testing")
+            
+            save_prospects(ps)
+            
+    threading.Thread(target=mock_audit_background, args=(new_id,)).start()
+
+    return jsonify({"message": "Audit started", "prospect": p}), 202
 
 # ── Run ─────────────────────────────────────────────────────────────────
 
