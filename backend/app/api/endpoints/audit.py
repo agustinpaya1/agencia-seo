@@ -1,14 +1,14 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 import uuid
 from datetime import datetime
 from ...models.audit import AuditRequest
-from ...services.core import load_prospects, save_prospects
+from ...dependencies import get_prospects_collection
 from ...services.audit import mock_audit_background
 
 router = APIRouter()
 
 @router.post("", status_code=202)
-def start_audit(data: AuditRequest, background_tasks: BackgroundTasks):
+async def start_audit(data: AuditRequest, background_tasks: BackgroundTasks, collection = Depends(get_prospects_collection)):
     """Starts a new GEO audit for a given URL"""
     url = data.url.strip()
     if not url:
@@ -16,11 +16,7 @@ def start_audit(data: AuditRequest, background_tasks: BackgroundTasks):
 
     domain = url.replace("https://", "").replace("http://", "").split("/")[0]
 
-    # Create a new prospect in 'audit' status
-    prospects = load_prospects()
-    new_id = str(uuid.uuid4())[:8]
     p = {
-        "id": new_id,
         "company": domain.capitalize(),
         "domain": domain,
         "status": "audit",
@@ -35,10 +31,14 @@ def start_audit(data: AuditRequest, background_tasks: BackgroundTasks):
             }
         ],
     }
-    prospects.append(p)
-    save_prospects(prospects)
+    
+    result = await collection.insert_one(p)
+    inserted_id = result.inserted_id
 
     # Spawn background task
-    background_tasks.add_task(mock_audit_background, new_id, domain)
+    background_tasks.add_task(mock_audit_background, inserted_id, domain, collection)
+
+    p["id"] = str(inserted_id)
+    p.pop("_id", None)
 
     return {"message": "Audit started", "prospect": p}

@@ -33,6 +33,51 @@ DEFAULT_HEADERS = {
 }
 
 
+def assess_ssr_content(html: str) -> dict:
+    """Heuristic: does the raw HTML already carry server-rendered content?
+
+    Single source of truth for the "is this a client-side-only shell?" judgment,
+    reused by the deterministic audit engine (audit_engine/ssr.py -> technical.py)
+    so the two never disagree on the same page. Encodes the Issue #19 fix: a
+    framework-style root div (id app/root/__next/__nuxt) is only treated as a
+    client-rendered shell when BOTH the root has minimal text AND the whole page
+    is under 200 words — so SSR/prerendered sites (WordPress, LiteSpeed Cache,
+    Next.js) that merely use such a mount point are not misflagged.
+
+    Root-div text is measured BEFORE decompose() so nested <script>/<style> inside
+    the root do not zero out the measurement.
+
+    Returns ``{"has_ssr_content": bool, "word_count": int, "errors": list[str]}``.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    # Framework mount points — measure inner text before the destructive
+    # decompose() below strips nested elements from the tree.
+    js_app_roots = soup.find_all(id=re.compile(r"(app|root|__next|__nuxt)", re.I))
+    root_measures = [
+        (root_el.get("id", "unknown"), len(root_el.get_text(strip=True)))
+        for root_el in js_app_roots
+    ]
+
+    for element in soup.find_all(["script", "style", "nav", "footer", "header"]):
+        element.decompose()
+    word_count = len(soup.get_text(separator=" ", strip=True).split())
+
+    has_ssr_content = True
+    errors: list[str] = []
+    for root_id, text_length in root_measures:
+        # Only a client-side shell if the root is near-empty AND the page overall
+        # is thin — SSR/prerendered sites have substantial text regardless.
+        if text_length < 50 and word_count < 200:
+            has_ssr_content = False
+            errors.append(
+                f"Possible client-side only rendering detected: "
+                f"#{root_id} has minimal server-rendered content "
+                f"({word_count} words on page)"
+            )
+    return {"has_ssr_content": has_ssr_content, "word_count": word_count, "errors": errors}
+
+
 def fetch_page(url: str, timeout: int = 30) -> dict:
     """Fetch a page and return structured analysis data."""
     result = {
@@ -127,21 +172,6 @@ def fetch_page(url: str, timeout: int = 30) -> dict:
             except (json.JSONDecodeError, TypeError):
                 result["errors"].append("Invalid JSON-LD detected")
 
-        # SSR check — must run BEFORE decompose() mutates the tree
-        js_app_roots = soup.find_all(
-            id=re.compile(r"(app|root|__next|__nuxt)", re.I)
-        )
-
-        # Check SSR by measuring content inside framework root divs
-        # before decompose() strips elements from the tree
-        ssr_check_results = []
-        for root_el in js_app_roots:
-            inner_text = root_el.get_text(strip=True)
-            ssr_check_results.append({
-                "id": root_el.get("id", "unknown"),
-                "text_length": len(inner_text),
-            })
-
         # Text content — decompose non-content elements (destructive)
         for element in soup.find_all(["script", "style", "nav", "footer", "header"]):
             element.decompose()
@@ -172,21 +202,11 @@ def fetch_page(url: str, timeout: int = 30) -> dict:
             }
             result["images"].append(img_data)
 
-        # SSR assessment — use pre-decompose measurements + overall content
-        if js_app_roots:
-            for check in ssr_check_results:
-                # Only flag as client-rendered if both the root div has
-                # minimal content AND the overall page has little text.
-                # Sites using SSR/prerendering (WordPress, LiteSpeed Cache,
-                # Prerender.io) will have substantial text despite having
-                # framework-style root divs.
-                if check["text_length"] < 50 and result["word_count"] < 200:
-                    result["has_ssr_content"] = False
-                    result["errors"].append(
-                        f"Possible client-side only rendering detected: "
-                        f"#{check['id']} has minimal server-rendered content "
-                        f"({result['word_count']} words on page)"
-                    )
+        # SSR assessment — delegated to the shared heuristic so this script and
+        # the audit engine (technical.py) never disagree on the same page.
+        ssr = assess_ssr_content(response.text)
+        result["has_ssr_content"] = ssr["has_ssr_content"]
+        result["errors"].extend(ssr["errors"])
 
     except requests.exceptions.Timeout:
         result["errors"].append(f"Timeout after {timeout} seconds")

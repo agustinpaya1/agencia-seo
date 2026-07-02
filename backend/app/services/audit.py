@@ -1,16 +1,14 @@
-import time
-from .core import load_prospects, save_prospects, PROPOSALS_DIR
+import asyncio
+from .core import PROPOSALS_DIR
 
-def mock_audit_background(pid: str, domain: str):
-    time.sleep(5)  # Simulate work
-    ps = load_prospects()
-    target = next((x for x in ps if x.get("id") == pid), None)
-    if target:
-        target["geo_score"] = 45  # mock result
-        target["status"] = "proposal"
+async def mock_audit_background(inserted_id, domain: str, collection):
+    await asyncio.sleep(5)  # Simulate work
+    
+    await collection.update_one(
+        {"_id": inserted_id}, 
+        {"$set": {"status": "completed", "geo_score": 85}}
+    )
 
-        # Create a dummy PDF to avoid 404s in the UI
-        dummy_pdf_path = PROPOSALS_DIR / f"{domain}_{pid}.pdf"
-        dummy_pdf_path.write_text("Dummy PDF content for testing")
-
-        save_prospects(ps)
+    # Create a dummy PDF to avoid 404s in the UI
+    dummy_pdf_path = PROPOSALS_DIR / f"{domain}_{inserted_id}.pdf"
+    dummy_pdf_path.write_text("Dummy PDF content for testing")

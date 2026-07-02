@@ -1,83 +1,113 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from datetime import datetime
+from bson import ObjectId
+from pymongo import ReturnDocument
 from ...models.prospects import NoteRequest, StatusRequest
-from ...services.core import load_prospects, save_prospects, crm_stats, find_pdf
+from ...services.core import crm_stats, find_pdf
+from ...dependencies import get_prospects_collection
 
 router = APIRouter()
 
 @router.get("")
-def get_prospects(status: str = "", sort: str = "score"):
-    prospects = load_prospects()
+async def get_prospects(status: str = "", sort: str = "score", collection = Depends(get_prospects_collection)):
+    query = {}
+    if status:
+        query["status"] = status
 
-    filtered = [p for p in prospects if not status or p.get("status") == status]
-
+    cursor = collection.find(query)
+    
     if sort == "score":
-        filtered.sort(key=lambda x: x.get("geo_score", 0))
+        cursor = cursor.sort("geo_score", 1)
     elif sort == "company":
-        filtered.sort(key=lambda x: x.get("company", "").lower())
+        cursor = cursor.sort("company", 1)
     elif sort == "mrr":
-        filtered.sort(key=lambda x: x.get("monthly_value", 0), reverse=True)
+        cursor = cursor.sort("monthly_value", -1)
+
+    docs = await cursor.to_list(length=100)
+    
+    prospects = []
+    for doc in docs:
+        doc["id"] = str(doc.pop("_id"))
+        prospects.append(doc)
 
     stats = crm_stats(prospects)
-
-    return {"prospects": filtered, "stats": stats}
+    
+    return {"prospects": prospects, "stats": stats}
 
 @router.get("/{pid}")
-def get_prospect_detail(pid: str):
-    prospects = load_prospects()
-    p = next((x for x in prospects if x.get("id") == pid), None)
+async def get_prospect_detail(pid: str, collection = Depends(get_prospects_collection)):
+    try:
+        obj_id = ObjectId(pid)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+        
+    p = await collection.find_one({"_id": obj_id})
     if not p:
         raise HTTPException(status_code=404, detail="Prospect not found")
 
+    p["id"] = str(p.pop("_id"))
     p["has_pdf"] = find_pdf(p) is not None
     return p
 
 @router.post("/{pid}/note")
-def add_note(pid: str, data: NoteRequest):
-    prospects = load_prospects()
-    p = next((x for x in prospects if x.get("id") == pid), None)
-    if not p:
-        raise HTTPException(status_code=404, detail="Prospect not found")
+async def add_note(pid: str, data: NoteRequest, collection = Depends(get_prospects_collection)):
+    try:
+        obj_id = ObjectId(pid)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
 
     text = data.text.strip()
     if text:
-        if "notes" not in p:
-            p["notes"] = []
-        p["notes"].append(
-            {
-                "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
-                "text": text,
-            }
+        new_note = {
+            "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+            "text": text,
+        }
+        result = await collection.find_one_and_update(
+            {"_id": obj_id},
+            {"$push": {"notes": new_note}, "$set": {"updated_at": datetime.now().strftime("%Y-%m-%d")}},
+            return_document=ReturnDocument.AFTER
         )
-        p["updated_at"] = datetime.now().strftime("%Y-%m-%d")
-        save_prospects(prospects)
-
-    return p
+        if not result:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+        result["id"] = str(result.pop("_id"))
+        return result
+    raise HTTPException(status_code=400, detail="Note text is required")
 
 @router.put("/{pid}/status")
-def update_status(pid: str, data: StatusRequest):
-    prospects = load_prospects()
-    p = next((x for x in prospects if x.get("id") == pid), None)
-    if not p:
-        raise HTTPException(status_code=404, detail="Prospect not found")
+async def update_status(pid: str, data: StatusRequest, collection = Depends(get_prospects_collection)):
+    try:
+        obj_id = ObjectId(pid)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
 
     new_status = data.status.strip()
-    valid_statuses = ["lead", "audit", "proposal", "active", "churned", "lost"]
+    valid_statuses = ["lead", "audit", "proposal", "active", "churned", "lost", "completed"]
+    
     if new_status in valid_statuses:
-        p["status"] = new_status
-        p["updated_at"] = datetime.now().strftime("%Y-%m-%d")
-        save_prospects(prospects)
-
-    return p
+        result = await collection.find_one_and_update(
+            {"_id": obj_id},
+            {"$set": {"status": new_status, "updated_at": datetime.now().strftime("%Y-%m-%d")}},
+            return_document=ReturnDocument.AFTER
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+        result["id"] = str(result.pop("_id"))
+        return result
+    raise HTTPException(status_code=400, detail="Invalid status")
 
 @router.get("/{pid}/pdf")
-def download_pdf(pid: str):
-    prospects = load_prospects()
-    p = next((x for x in prospects if x.get("id") == pid), None)
+async def download_pdf(pid: str, collection = Depends(get_prospects_collection)):
+    try:
+        obj_id = ObjectId(pid)
+    except:
+        raise HTTPException(status_code=400, detail="Invalid ID format")
+        
+    p = await collection.find_one({"_id": obj_id})
     if not p:
         raise HTTPException(status_code=404, detail="Prospect not found")
 
+    p["id"] = str(p.pop("_id"))
     pdf_path = find_pdf(p)
     if not pdf_path:
         raise HTTPException(status_code=404, detail="PDF not found")

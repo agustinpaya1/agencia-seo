@@ -1,23 +1,30 @@
 "use server";
 
-import { updateTag } from "next/cache";
+import { revalidateTag } from "next/cache";
 
-export async function startAuditAction(url: string) {
-  if (!url) return { error: "URL is required" };
-  
+export async function startAuditAction(prevState: any, formData: FormData) {
+  const url = formData.get("url") as string;
+
+  if (!url || url.trim() === "") {
+    return { error: "La URL es obligatoria" };
+  }
+
   try {
-    const res = await fetch("http://127.0.0.1:5050/api/audit", {
+    const response = await fetch("http://127.0.0.1:8000/api/audit", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url: url.trim() }),
     });
-    
-    if (res.ok) {
-      updateTag("prospects");
-      return { success: true };
+
+    if (response.ok) {
+      revalidateTag("prospects");
+      return { success: true, message: "Auditoría iniciada correctamente" };
+    } else {
+      return { error: "Falló la conexión con el motor de auditoría" };
     }
-    return { error: "Failed to start audit" };
-  } catch (e) {
-    return { error: "Backend unreachable" };
+  } catch (error) {
+    return { error: "Error al comunicarse con el servidor de auditoría" };
   }
 }
