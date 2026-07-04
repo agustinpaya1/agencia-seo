@@ -10,9 +10,9 @@ Based on research showing optimal AI-cited passages are:
 - Structured with clear answer patterns
 """
 
-import sys
 import json
 import re
+import sys
 from typing import Optional
 
 try:
@@ -71,9 +71,7 @@ def score_passage(text: str, heading: Optional[str] = None) -> dict:
 
     # Clear, direct sentence structure
     sentences = re.split(r"[.!?]+", text)
-    short_clear_sentences = sum(
-        1 for s in sentences if 5 <= len(s.split()) <= 25
-    )
+    short_clear_sentences = sum(1 for s in sentences if 5 <= len(s.split()) <= 25)
     if sentences:
         clarity_ratio = short_clear_sentences / len(sentences)
         abq_score += int(clarity_ratio * 10)
@@ -143,7 +141,9 @@ def score_passage(text: str, heading: Optional[str] = None) -> dict:
             sr_score += 2
 
     # Contains list-like structures
-    if re.search(r"(?:first|second|third|finally|additionally|moreover|furthermore)", text, re.IGNORECASE):
+    if re.search(
+        r"(?:first|second|third|finally|additionally|moreover|furthermore)", text, re.IGNORECASE
+    ):
         sr_score += 4
 
     # Contains numbered items or bullet-like content
@@ -168,7 +168,13 @@ def score_passage(text: str, heading: Optional[str] = None) -> dict:
     sd_score += min(dollar_count * 3, 5)
 
     # Other numbers with context
-    number_count = len(re.findall(r"\b\d+(?:,\d{3})*(?:\.\d+)?\s+(?:users|customers|pages|sites|companies|businesses|people|percent|times|x\b)", text, re.IGNORECASE))
+    number_count = len(
+        re.findall(
+            r"\b\d+(?:,\d{3})*(?:\.\d+)?\s+(?:users|customers|pages|sites|companies|businesses|people|percent|times|x\b)",
+            text,
+            re.IGNORECASE,
+        )
+    )
     sd_score += min(number_count * 2, 4)
 
     # Year references (indicates timeliness)
@@ -244,26 +250,18 @@ def score_passage(text: str, heading: Optional[str] = None) -> dict:
     }
 
 
-def analyze_page_citability(url: str) -> dict:
-    """Analyze all content blocks on a page for citability."""
-    try:
-        response = requests.get(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-            },
-            timeout=30,
-        )
-        response.raise_for_status()
-    except Exception as e:
-        return {"error": f"Failed to fetch page: {str(e)}"}
+def analyze_html_citability(html: str, *, url: str | None = None) -> dict:
+    """Analyze all content blocks in already-fetched HTML for citability.
 
-    soup = BeautifulSoup(response.text, "lxml")
+    Takes HTML directly instead of fetching it, so callers that already hold a
+    page's HTML (e.g. the audit engine's single-fetch pipeline) don't trigger a
+    second, possibly-divergent request to the same URL. ``url`` is carried
+    through only for the report's ``url`` field; no request is made here.
+    """
+    soup = BeautifulSoup(html, "lxml")
 
     # Remove non-content elements
-    for element in soup.find_all(
-        ["script", "style", "nav", "footer", "header", "aside", "form"]
-    ):
+    for element in soup.find_all(["script", "style", "nav", "footer", "header", "aside", "form"]):
         element.decompose()
 
     # Extract content blocks
@@ -277,9 +275,7 @@ def analyze_page_citability(url: str) -> dict:
             if current_paragraphs:
                 combined = " ".join(current_paragraphs)
                 if len(combined.split()) >= 20:
-                    blocks.append(
-                        {"heading": current_heading, "content": combined}
-                    )
+                    blocks.append({"heading": current_heading, "content": combined})
             current_heading = element.get_text(strip=True)
             current_paragraphs = []
         else:
@@ -306,9 +302,7 @@ def analyze_page_citability(url: str) -> dict:
         bottom_blocks = sorted(scored_blocks, key=lambda x: x["total_score"])[:5]
 
         # Optimal passage count (134-167 words)
-        optimal_count = sum(
-            1 for b in scored_blocks if 134 <= b["word_count"] <= 167
-        )
+        optimal_count = sum(1 for b in scored_blocks if 134 <= b["word_count"] <= 167)
     else:
         avg_score = 0
         top_blocks = []
@@ -330,6 +324,28 @@ def analyze_page_citability(url: str) -> dict:
         "bottom_5_citable": bottom_blocks,
         "all_blocks": scored_blocks,
     }
+
+
+def analyze_page_citability(url: str) -> dict:
+    """Fetch ``url`` and analyze it for citability (CLI / standalone use only).
+
+    The audit engine never calls this: it already has the page's HTML from its
+    own single fetch and calls :func:`analyze_html_citability` directly, so it
+    never re-fetches the same URL a second time.
+    """
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+    except Exception as e:
+        return {"error": f"Failed to fetch page: {str(e)}"}
+
+    return analyze_html_citability(response.text, url=url)
 
 
 if __name__ == "__main__":

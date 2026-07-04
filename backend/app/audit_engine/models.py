@@ -41,10 +41,17 @@ class Severity(str, Enum):
 
 
 class CwvSource(str, Enum):
-    """Origin of the Core Web Vitals numbers (diagram 3.4)."""
+    """Origin of the Core Web Vitals numbers (diagram 3.4).
+
+    Provenance is tracked per metric (LCP/INP/CLS can come from different
+    sources): CrUX may report a real field LCP while INP/CLS fall back to the lab
+    median. ``MIXED`` is the overall summary label for that case; the per-metric
+    ``*_source`` fields on :class:`PerformanceResult` carry the exact origin.
+    """
 
     FIELD = "field"  # CrUX real-user data ("dato real de Google")
-    LAB = "lab"      # Lighthouse lab run ("sin trafico real registrado")
+    LAB = "lab"  # Lighthouse lab run ("sin trafico real registrado")
+    MIXED = "mixed"  # overall summary: some metrics FIELD, others LAB
 
 
 # --------------------------------------------------------------------------- #
@@ -54,9 +61,9 @@ class WeightedDimension(BaseModel):
     """A single weighted category inside a composite score."""
 
     name: str
-    score: float                       # 0-100, normalised for this dimension
-    weight: float                      # 0-1 share of the composite total
-    points: float                      # score * weight, contribution to total
+    score: float  # 0-100, normalised for this dimension
+    weight: float  # 0-1 share of the composite total
+    points: float  # score * weight, contribution to total
     findings: list[str] = Field(default_factory=list)
 
 
@@ -74,12 +81,13 @@ class FetchResult(BaseModel):
     domain: str
     reachability: Reachability
     status_code: int | None = None
-    final_url: str | None = None                 # after following redirects
+    final_url: str | None = None  # after following redirects
     html: str | None = None
     headers: dict[str, str] = Field(default_factory=dict)
     robots_txt: str | None = None
     sitemap_urls: list[str] = Field(default_factory=list)
     fetched_at: datetime
+    notes: list[str] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -97,10 +105,10 @@ class DetectedTechnology(BaseModel):
 class TechStackResult(BaseModel):
     """Technology detection output (diagram 3.2)."""
 
-    identified: bool                             # False -> "stack no identificado"
+    identified: bool  # False -> "stack no identificado"
     technologies: list[DetectedTechnology] = Field(default_factory=list)
     cms: str | None = None
-    behind_cdn: bool = False                     # origin server not visible, edge only
+    behind_cdn: bool = False  # origin server not visible, edge only
     origin_visible: bool = True
     confidence: Confidence = Confidence.LOW
     notes: list[str] = Field(default_factory=list)
@@ -113,7 +121,7 @@ class TechnicalResult(BaseModel):
     """Deterministic technical SEO score (technical.py, pure over fetch+stack)."""
 
     dimensions: list[WeightedDimension] = Field(default_factory=list)
-    score: float = 0.0                           # 0-100 weighted
+    score: float = 0.0  # 0-100 weighted
 
 
 # --------------------------------------------------------------------------- #
@@ -147,9 +155,9 @@ class Vulnerability(BaseModel):
 class SecurityResult(BaseModel):
     """Authoritative security result (security.py, diagram 3.3)."""
 
-    version_known: bool                          # False -> "sin datos suficientes"
+    version_known: bool  # False -> "sin datos suficientes"
     headers: SecurityHeaders = Field(default_factory=SecurityHeaders)
-    observatory_grade: str | None = None         # MDN HTTP Observatory
+    observatory_grade: str | None = None  # MDN HTTP Observatory
     observatory_score: int | None = None
     vulnerabilities: list[Vulnerability] = Field(default_factory=list)
     has_known_vulns: bool = False
@@ -166,13 +174,16 @@ class PerformanceResult(BaseModel):
     returned as-is with ``from_snapshot=True`` and its original ``snapshot_at``.
     """
 
-    source: CwvSource
+    source: CwvSource  # overall summary (FIELD/LAB/MIXED)
     lcp_ms: float | None = None
     inp_ms: float | None = None
     cls: float | None = None
-    lighthouse_runs: int = 0                      # 3 runs, median is taken
+    lcp_source: CwvSource | None = None  # per-metric provenance; None when the metric is None
+    inp_source: CwvSource | None = None
+    cls_source: CwvSource | None = None
+    lighthouse_runs: int = 0  # 3 runs, median is taken
     crux_available: bool = False
-    from_snapshot: bool = False                   # served from a <48h snapshot
+    from_snapshot: bool = False  # served from a <48h snapshot
     snapshot_at: datetime
     notes: list[str] = Field(default_factory=list)
 
@@ -194,11 +205,11 @@ class SchemaResult(BaseModel):
     """Structured-data validation result (schema_org.py)."""
 
     detected_types: list[str] = Field(default_factory=list)
-    format: str = "none"                         # json-ld | microdata | rdfa | mixed | none
+    format: str = "none"  # json-ld | microdata | rdfa | mixed | none
     json_ld_valid: bool = False
     server_rendered: bool = False
-    checks: list[SchemaCheck] = Field(default_factory=list)   # the 12 validations
-    score: float = 0.0                           # 0-100
+    checks: list[SchemaCheck] = Field(default_factory=list)  # the 12 validations
+    score: float = 0.0  # 0-100
 
 
 # --------------------------------------------------------------------------- #
@@ -208,7 +219,7 @@ class KeywordSuggestion(BaseModel):
     """A single suggested search query with the on-page signal it came from."""
 
     query: str
-    source: str                                  # title | meta | h1 | schema_type | location
+    source: str  # title | meta | h1 | schema_type | location
     notes: list[str] = Field(default_factory=list)
 
 
@@ -229,7 +240,7 @@ class CitabilityResult(BaseModel):
     rewritten. Feeds the 5th category of the final weighted score.
     """
 
-    score: float = 0.0                           # 0-100, page-level average
+    score: float = 0.0  # 0-100, page-level average
     blocks_analyzed: int = 0
     optimal_length_passages: int = 0
     grade_distribution: dict[str, int] = Field(default_factory=dict)
@@ -242,7 +253,7 @@ class CitabilityResult(BaseModel):
 class LeadViabilityResult(BaseModel):
     """Gate 1: is there enough margin to make this a lead? (diagram 3.1)."""
 
-    is_lead: bool                                # False -> already solved, not a lead
+    is_lead: bool  # False -> already solved, not a lead
     reason: str
     checked_dimensions: dict[str, float] = Field(default_factory=dict)
 
@@ -250,8 +261,8 @@ class LeadViabilityResult(BaseModel):
 class WeightedScoreResult(BaseModel):
     """Gate 2: final weighted score across the 5 categories (diagram 3.1)."""
 
-    final_score: float                           # 0-100
-    tier: str                                    # good | moderate | poor | critical
+    final_score: float  # 0-100
+    tier: str  # good | moderate | poor | critical
     breakdown: list[WeightedDimension] = Field(default_factory=list)
 
 
@@ -260,7 +271,7 @@ class AuditResult(BaseModel):
 
     domain: str
     reachability: Reachability
-    retry_at: datetime | None = None             # set when UNREACHABLE (now + 24h)
+    retry_at: datetime | None = None  # set when UNREACHABLE (now + 24h)
     fetch: FetchResult
     tech_stack: TechStackResult | None = None
     technical: TechnicalResult | None = None
@@ -270,5 +281,5 @@ class AuditResult(BaseModel):
     keywords: KeywordsResult | None = None
     citability: CitabilityResult | None = None
     lead_viability: LeadViabilityResult | None = None
-    weighted_score: WeightedScoreResult | None = None   # only when it is a lead
+    weighted_score: WeightedScoreResult | None = None  # only when it is a lead
     created_at: datetime

@@ -4,9 +4,9 @@ Fetch and parse web pages for GEO analysis.
 Extracts HTML, text content, meta tags, headers, and structured data.
 """
 
-import sys
 import json
 import re
+import sys
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -104,7 +104,9 @@ def fetch_page(url: str, timeout: int = 30) -> dict:
 
     parsed_url = urlparse(url)
     if parsed_url.scheme not in ("http", "https"):
-        result["errors"].append(f"Unsupported URL scheme: {parsed_url.scheme!r}. Only http and https are allowed.")
+        result["errors"].append(
+            f"Unsupported URL scheme: {parsed_url.scheme!r}. Only http and https are allowed."
+        )
         return result
 
     try:
@@ -269,14 +271,10 @@ def fetch_robots_txt(url: str, timeout: int = 15) -> dict:
                         agent_rules[current_agent] = []
                 elif line.lower().startswith("disallow:") and current_agent:
                     path = line.split(":", 1)[1].strip()
-                    agent_rules[current_agent].append(
-                        {"directive": "Disallow", "path": path}
-                    )
+                    agent_rules[current_agent].append({"directive": "Disallow", "path": path})
                 elif line.lower().startswith("allow:") and current_agent:
                     path = line.split(":", 1)[1].strip()
-                    agent_rules[current_agent].append(
-                        {"directive": "Allow", "path": path}
-                    )
+                    agent_rules[current_agent].append({"directive": "Allow", "path": path})
                 elif line.lower().startswith("sitemap:"):
                     sitemap_url = line.split(":", 1)[1].strip()
                     # Handle case where "Sitemap:" splits off the "http"
@@ -288,22 +286,16 @@ def fetch_robots_txt(url: str, timeout: int = 15) -> dict:
             for crawler in ai_crawlers:
                 if crawler in agent_rules:
                     rules = agent_rules[crawler]
-                    if any(
-                        r["directive"] == "Disallow" and r["path"] == "/"
-                        for r in rules
-                    ):
+                    if any(r["directive"] == "Disallow" and r["path"] == "/" for r in rules):
                         result["ai_crawler_status"][crawler] = "BLOCKED"
-                    elif any(
-                        r["directive"] == "Disallow" and r["path"] for r in rules
-                    ):
+                    elif any(r["directive"] == "Disallow" and r["path"] for r in rules):
                         result["ai_crawler_status"][crawler] = "PARTIALLY_BLOCKED"
                     else:
                         result["ai_crawler_status"][crawler] = "ALLOWED"
                 elif "*" in agent_rules:
                     wildcard_rules = agent_rules["*"]
                     if any(
-                        r["directive"] == "Disallow" and r["path"] == "/"
-                        for r in wildcard_rules
+                        r["directive"] == "Disallow" and r["path"] == "/" for r in wildcard_rules
                     ):
                         result["ai_crawler_status"][crawler] = "BLOCKED_BY_WILDCARD"
                     else:
@@ -316,9 +308,7 @@ def fetch_robots_txt(url: str, timeout: int = 15) -> dict:
             for crawler in ai_crawlers:
                 result["ai_crawler_status"][crawler] = "NO_ROBOTS_TXT"
         else:
-            result["errors"].append(
-                f"Unexpected status code: {response.status_code}"
-            )
+            result["errors"].append(f"Unexpected status code: {response.status_code}")
 
     except Exception as e:
         result["errors"].append(f"Error fetching robots.txt: {str(e)}")
@@ -340,9 +330,7 @@ def fetch_llms_txt(url: str, timeout: int = 15) -> dict:
 
     for key, check_url in [("llms_txt", llms_url), ("llms_full_txt", llms_full_url)]:
         try:
-            response = requests.get(
-                check_url, headers=DEFAULT_HEADERS, timeout=timeout
-            )
+            response = requests.get(check_url, headers=DEFAULT_HEADERS, timeout=timeout)
             if response.status_code == 200:
                 result[key]["exists"] = True
                 result[key]["content"] = response.text
@@ -357,9 +345,7 @@ def extract_content_blocks(html: str) -> list:
     soup = BeautifulSoup(html, "lxml")
 
     # Remove non-content elements
-    for element in soup.find_all(
-        ["script", "style", "nav", "footer", "header", "aside"]
-    ):
+    for element in soup.find_all(["script", "style", "nav", "footer", "header", "aside"]):
         element.decompose()
 
     blocks = []
@@ -386,9 +372,7 @@ def extract_content_blocks(html: str) -> list:
                             set(
                                 [
                                     e.name
-                                    for e in element.find_all_previous(
-                                        ["p", "ul", "ol", "table"]
-                                    )
+                                    for e in element.find_all_previous(["p", "ul", "ol", "table"])
                                 ]
                             )
                         ),
@@ -428,9 +412,7 @@ def crawl_sitemap(url: str, max_pages: int = 50, timeout: int = 15) -> list:
 
     for sitemap_url in sitemap_urls:
         try:
-            response = requests.get(
-                sitemap_url, headers=DEFAULT_HEADERS, timeout=timeout
-            )
+            response = requests.get(sitemap_url, headers=DEFAULT_HEADERS, timeout=timeout)
             if response.status_code == 200:
                 soup = BeautifulSoup(response.text, "lxml")
 

@@ -13,14 +13,12 @@ Platform importance for AI citations:
 5. Domain Rating/backlinks (~0.266 - weak)
 """
 
-import sys
 import json
-import re
+import sys
 from urllib.parse import quote_plus
 
 try:
     import requests
-    from bs4 import BeautifulSoup
 except ImportError:
     print("ERROR: Required packages not installed. Run: pip install -r requirements.txt")
     sys.exit(1)

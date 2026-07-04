@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 from urllib.parse import urlparse
 
@@ -82,15 +82,46 @@ _KNOWN_TYPES = (
     | _DEPRECATED_TYPES
     | _CHANGED_BUT_USEFUL_TYPES
     | {
-        "WebSite", "WebPage", "BreadcrumbList", "ListItem", "Person", "Brand",
-        "Offer", "AggregateOffer", "AggregateRating", "Rating", "Review",
-        "ImageObject", "VideoObject", "AudioObject", "PostalAddress",
-        "ContactPoint", "GeoCoordinates", "OpeningHoursSpecification", "Place",
-        "SearchAction", "EntryPoint", "Question", "Answer",
-        "SpeakableSpecification", "QuantitativeValue", "MonetaryAmount",
-        "DefinedTerm", "PropertyValue", "Occupation", "EducationalOrganization",
-        "CollectionPage", "AboutPage", "ContactPage", "ProfilePage",
-        "Restaurant", "Store", "Dentist", "Physician", "Attorney", "HomeAndConstructionBusiness",
+        "WebSite",
+        "WebPage",
+        "BreadcrumbList",
+        "ListItem",
+        "Person",
+        "Brand",
+        "Offer",
+        "AggregateOffer",
+        "AggregateRating",
+        "Rating",
+        "Review",
+        "ImageObject",
+        "VideoObject",
+        "AudioObject",
+        "PostalAddress",
+        "ContactPoint",
+        "GeoCoordinates",
+        "OpeningHoursSpecification",
+        "Place",
+        "SearchAction",
+        "EntryPoint",
+        "Question",
+        "Answer",
+        "SpeakableSpecification",
+        "QuantitativeValue",
+        "MonetaryAmount",
+        "DefinedTerm",
+        "PropertyValue",
+        "Occupation",
+        "EducationalOrganization",
+        "CollectionPage",
+        "AboutPage",
+        "ContactPage",
+        "ProfilePage",
+        "Restaurant",
+        "Store",
+        "Dentist",
+        "Physician",
+        "Attorney",
+        "HomeAndConstructionBusiness",
     }
 )
 
@@ -209,6 +240,7 @@ def evaluate_schema_blocks(
     server_rendered: bool = True,
     is_homepage: bool = False,
     url_status: Mapping[str, bool] | None = None,
+    inconclusive_sameas_urls: Collection[str] | None = None,
 ) -> SchemaResult:
     """Run the 12 geo-schema validations over already-extracted JSON-LD blocks.
 
@@ -219,7 +251,9 @@ def evaluate_schema_blocks(
 
     ``url_status`` maps a ``sameAs`` URL to whether it resolves (HEAD, filled in
     by the shell). When it is ``None`` the links are counted but reported as
-    unverified, so this function stays runnable with zero I/O.
+    unverified, so this function stays runnable with zero I/O. ``inconclusive_sameas_urls``
+    marks URLs whose probe came back 403/429 (bot-blocking) rather than a real
+    404/timeout — those are neither penalised as dead nor claimed as confirmed-live.
     """
     nodes, valid_blocks, invalid_blocks = _parse_nodes(raw_blocks)
     has_jsonld = bool(list(raw_blocks))
@@ -232,7 +266,7 @@ def evaluate_schema_blocks(
 
     checks: list[SchemaCheck] = [
         _check_organization(org_person),
-        _check_sameas(org_person, url_status),
+        _check_sameas(org_person, url_status, inconclusive_sameas_urls),
         _check_article_author(article_nodes),
         _check_business_type(nodes),
         _check_website_searchaction(website_nodes),
@@ -257,7 +291,11 @@ def evaluate_schema_blocks(
 
 def _check_organization(org_person: list[dict]) -> SchemaCheck:
     """Rubric row 1 (max 15): Organization/Person present and complete."""
-    cid, label, mx = "organization-or-person-present", "Organization/Person schema present and complete", 15.0
+    cid, label, mx = (
+        "organization-or-person-present",
+        "Organization/Person schema present and complete",
+        15.0,
+    )
     if not org_person:
         return _check(cid, label, 0.0, mx, ["No se encontró esquema Organization ni Person."])
 
@@ -266,19 +304,40 @@ def _check_organization(org_person: list[dict]) -> SchemaCheck:
     for node in org_person:
         if _is_org(node):
             required = {"name", "url", "logo"}
-            recommended = {"description", "sameAs", "foundingDate", "founder",
-                           "address", "contactPoint", "areaServed", "knowsAbout"}
+            recommended = {
+                "description",
+                "sameAs",
+                "foundingDate",
+                "founder",
+                "address",
+                "contactPoint",
+                "areaServed",
+                "knowsAbout",
+            }
             kind = "Organization"
         else:
             required = {"name", "url"}
-            recommended = {"sameAs", "jobTitle", "worksFor", "knowsAbout",
-                           "alumniOf", "award", "description", "image"}
+            recommended = {
+                "sameAs",
+                "jobTitle",
+                "worksFor",
+                "knowsAbout",
+                "alumniOf",
+                "award",
+                "description",
+                "image",
+            }
             kind = "Person"
         missing_req = sorted(k for k in required if not _has(node, k))
         rec_count = sum(1 for k in recommended if _has(node, k))
         if not missing_req and rec_count >= 2:
-            return _check(cid, label, mx, mx,
-                          [f"{kind} completo: requeridos presentes y {rec_count} recomendados."])
+            return _check(
+                cid,
+                label,
+                mx,
+                mx,
+                [f"{kind} completo: requeridos presentes y {rec_count} recomendados."],
+            )
         if best < 10.0:
             best = 10.0
             note = f"{kind} básico."
@@ -289,8 +348,18 @@ def _check_organization(org_person: list[dict]) -> SchemaCheck:
     return _check(cid, label, best, mx, best_notes)
 
 
-def _check_sameas(org_person: list[dict], url_status: Mapping[str, bool] | None) -> SchemaCheck:
-    """Rubric row 2 (max 15): sameAs links, 3 pts each capped at 15."""
+def _check_sameas(
+    org_person: list[dict],
+    url_status: Mapping[str, bool] | None,
+    inconclusive_urls: Collection[str] | None = None,
+) -> SchemaCheck:
+    """Rubric row 2 (max 15): sameAs links, 3 pts each capped at 15.
+
+    A sameAs probe that comes back 403/429 means a bot got blocked, not that the
+    link is dead — ``inconclusive_urls`` (the shell's HEAD/GET probes) keeps those
+    out of the "dead" bucket entirely; they still count for points, same as an
+    unverified declaration, with their own note so the distinction is visible.
+    """
     cid, label, mx = "sameas-links", "sameAs links to external platforms (3 pts each, max 15)", 15.0
     urls: list[str] = []
     for node in org_person:
@@ -299,21 +368,41 @@ def _check_sameas(org_person: list[dict], url_status: Mapping[str, bool] | None)
                 urls.append(value.strip())
 
     if not urls:
-        note = ("Sin sameAs en Organization/Person." if org_person
-                else "Sin Organization/Person, no hay sameAs que evaluar.")
+        note = (
+            "Sin sameAs en Organization/Person."
+            if org_person
+            else "Sin Organization/Person, no hay sameAs que evaluar."
+        )
         return _check(cid, label, 0.0, mx, [note])
 
     if url_status is None:
         points = min(len(urls) * 3.0, mx)
-        return _check(cid, label, points, mx,
-                      [f"{len(urls)} sameAs declarados (sin verificar resolución de red)."])
+        return _check(
+            cid,
+            label,
+            points,
+            mx,
+            [f"{len(urls)} sameAs declarados (sin verificar resolución de red)."],
+        )
 
-    resolving = [u for u in urls if url_status.get(u, False)]
-    dead = [u for u in urls if not url_status.get(u, False)]
-    points = min(len(resolving) * 3.0, mx)
-    notes = [f"{len(resolving)}/{len(urls)} sameAs resuelven vía HEAD (3 pts c/u, máx 15)."]
+    inconclusive = set(inconclusive_urls or ())
+    confirmed = [u for u in urls if u not in inconclusive and url_status.get(u, False)]
+    blocked = [u for u in urls if u in inconclusive]
+    dead = [u for u in urls if u not in inconclusive and not url_status.get(u, False)]
+
+    counted = confirmed + blocked
+    points = min(len(counted) * 3.0, mx)
+    summary = f"{len(counted)}/{len(urls)} sameAs cuentan para el score (3 pts c/u, máx 15): {len(confirmed)} confirmados vía HEAD"
+    if blocked:
+        summary += f", {len(blocked)} bloqueados al verificar (no penalizados)"
+    notes = [summary + "."]
     if dead:
         notes.append("No resuelven (404/timeout): " + ", ".join(dead))
+    if blocked:
+        notes.append(
+            "Bloqueado al verificar (403/429, probable anti-bot; no se trata como enlace roto): "
+            + ", ".join(blocked)
+        )
     return _check(cid, label, points, mx, notes)
 
 
@@ -329,14 +418,18 @@ def _check_article_author(article_nodes: list[dict]) -> SchemaCheck:
         for author in _as_list(article.get("author")):
             if isinstance(author, dict):
                 if _has(author, "name") and any(_has(author, p) for p in detail_props):
-                    return _check(cid, label, mx, mx, ["Autor con nombre y datos de perfil (E-E-A-T)."])
+                    return _check(
+                        cid, label, mx, mx, ["Autor con nombre y datos de perfil (E-E-A-T)."]
+                    )
                 if _has(author, "name"):
                     best = max(best, 5.0)
             elif isinstance(author, str) and author.strip():
                 best = max(best, 5.0)
     if best == 0.0:
         return _check(cid, label, 0.0, mx, ["Article sin propiedad author."])
-    return _check(cid, label, best, mx, ["Autor presente solo con nombre (sin url/sameAs/jobTitle…)."])
+    return _check(
+        cid, label, best, mx, ["Autor presente solo con nombre (sin url/sameAs/jobTitle…)."]
+    )
 
 
 def _check_business_type(nodes: list[dict]) -> SchemaCheck:
@@ -356,8 +449,15 @@ def _check_business_type(nodes: list[dict]) -> SchemaCheck:
             best = 5.0
             best_notes = [f"{type_name} parcial. Faltan requeridos: {', '.join(missing)}."]
     if best == 0.0:
-        return _check(cid, label, 0.0, mx,
-                      ["Sin esquema específico de tipo de negocio (LocalBusiness/Product/SoftwareApplication/Article…)."])
+        return _check(
+            cid,
+            label,
+            0.0,
+            mx,
+            [
+                "Sin esquema específico de tipo de negocio (LocalBusiness/Product/SoftwareApplication/Article…)."
+            ],
+        )
     return _check(cid, label, best, mx, best_notes)
 
 
@@ -371,8 +471,14 @@ def _business_type_requirement(types: set[str]) -> tuple[str, set[str]] | None:
     if types & _ARTICLE_TYPES:
         return "Article", _BUSINESS_TYPE_REQUIRED["Article"]
     # LocalBusiness subtypes (Restaurant, Store, Dentist, …) count as LocalBusiness.
-    if types & {"Restaurant", "Store", "Dentist", "Physician", "Attorney",
-                "HomeAndConstructionBusiness"}:
+    if types & {
+        "Restaurant",
+        "Store",
+        "Dentist",
+        "Physician",
+        "Attorney",
+        "HomeAndConstructionBusiness",
+    }:
         return "LocalBusiness", _BUSINESS_TYPE_REQUIRED["LocalBusiness"]
     for name, required in _BUSINESS_TYPE_REQUIRED.items():
         if name in types:
@@ -402,8 +508,13 @@ def _check_breadcrumb(breadcrumb_nodes: list[dict], is_homepage: bool) -> Schema
     if breadcrumb_nodes:
         return _check(cid, label, mx, mx, ["BreadcrumbList presente."])
     if is_homepage:
-        return _check(cid, label, mx, mx,
-                      ["N/A: es la homepage; el rubric solo pide breadcrumb en páginas internas."])
+        return _check(
+            cid,
+            label,
+            mx,
+            mx,
+            ["N/A: es la homepage; el rubric solo pide breadcrumb en páginas internas."],
+        )
     return _check(cid, label, 0.0, mx, ["Falta BreadcrumbList en una página interna."])
 
 
@@ -425,9 +536,16 @@ def _check_server_rendered(has_jsonld: bool, server_rendered: bool) -> SchemaChe
     cid, label, mx = "server-rendered", "Structured data server-rendered (not JS-injected)", 10.0
     if has_jsonld and server_rendered:
         return _check(cid, label, mx, mx, ["JSON-LD presente en el HTML servido por el origen."])
-    return _check(cid, label, 0.0, mx,
-                  ["Sin JSON-LD en el HTML servido (ausente o inyectado por JS; "
-                   "el fetch estático no ejecuta JavaScript)."])
+    return _check(
+        cid,
+        label,
+        0.0,
+        mx,
+        [
+            "Sin JSON-LD en el HTML servido (ausente o inyectado por JS; "
+            "el fetch estático no ejecuta JavaScript)."
+        ],
+    )
 
 
 def _check_speakable(nodes: list[dict], article_nodes: list[dict]) -> SchemaCheck:
@@ -447,8 +565,13 @@ def _check_valid_json(has_jsonld: bool, invalid_blocks: int, nodes: list[dict]) 
     if not has_jsonld:
         return _check(cid, label, 0.0, mx, ["Sin datos estructurados que validar."])
     if invalid_blocks:
-        return _check(cid, label, 0.0, mx,
-                      [f"{invalid_blocks} bloque(s) JSON-LD con JSON inválido (error mayor)."])
+        return _check(
+            cid,
+            label,
+            0.0,
+            mx,
+            [f"{invalid_blocks} bloque(s) JSON-LD con JSON inválido (error mayor)."],
+        )
     missing_type = sum(1 for n in nodes if not _types_of(n))
     unknown = sorted({t for n in nodes for t in _types_of(n) if t not in _KNOWN_TYPES})
     if missing_type or unknown:
@@ -463,14 +586,20 @@ def _check_valid_json(has_jsonld: bool, invalid_blocks: int, nodes: list[dict]) 
 
 def _check_knowsabout(org_person: list[dict]) -> SchemaCheck:
     """Rubric row 11 (max 5): knowsAbout with 3+ topics on Organization/Person."""
-    cid, label, mx = "knowsabout-topics", "knowsAbout property on Organization/Person (3+ topics)", 5.0
+    cid, label, mx = (
+        "knowsabout-topics",
+        "knowsAbout property on Organization/Person (3+ topics)",
+        5.0,
+    )
     topics: list[Any] = []
     for node in org_person:
         topics.extend(t for t in _as_list(node.get("knowsAbout")) if t)
     if len(topics) >= 3:
         return _check(cid, label, mx, mx, [f"knowsAbout con {len(topics)} temas."])
     if topics:
-        return _check(cid, label, 0.0, mx, [f"knowsAbout con solo {len(topics)} tema(s); se necesitan ≥3."])
+        return _check(
+            cid, label, 0.0, mx, [f"knowsAbout con solo {len(topics)} tema(s); se necesitan ≥3."]
+        )
     return _check(cid, label, 0.0, mx, ["Sin propiedad knowsAbout en Organization/Person."])
 
 
@@ -479,12 +608,22 @@ def _check_no_deprecated(types_present: set[str]) -> SchemaCheck:
     cid, label, mx = "no-deprecated-schemas", "No deprecated schemas present", 5.0
     deprecated = sorted(types_present & _DEPRECATED_TYPES)
     if deprecated:
-        return _check(cid, label, 0.0, mx,
-                      ["Esquemas obsoletos presentes (eliminar/reemplazar): " + ", ".join(deprecated)])
+        return _check(
+            cid,
+            label,
+            0.0,
+            mx,
+            ["Esquemas obsoletos presentes (eliminar/reemplazar): " + ", ".join(deprecated)],
+        )
     changed = sorted(types_present & _CHANGED_BUT_USEFUL_TYPES)
     if changed:
-        return _check(cid, label, mx, mx,
-                      ["Sin esquemas obsoletos. Cambiados pero aún útiles para GEO: " + ", ".join(changed)])
+        return _check(
+            cid,
+            label,
+            mx,
+            mx,
+            ["Sin esquemas obsoletos. Cambiados pero aún útiles para GEO: " + ", ".join(changed)],
+        )
     return _check(cid, label, mx, mx, ["Sin esquemas obsoletos."])
 
 
@@ -518,8 +657,12 @@ async def validate_schema(fetch: FetchResult) -> SchemaResult:
 
     if not html:
         return evaluate_schema_blocks(
-            [], has_microdata=False, has_rdfa=False,
-            server_rendered=False, is_homepage=is_homepage, url_status={},
+            [],
+            has_microdata=False,
+            has_rdfa=False,
+            server_rendered=False,
+            is_homepage=is_homepage,
+            url_status={},
         )
 
     soup = BeautifulSoup(html, "html.parser")
@@ -532,7 +675,9 @@ async def validate_schema(fetch: FetchResult) -> SchemaResult:
     server_rendered = bool(raw_blocks)
 
     same_as_urls = _collect_sameas_urls(raw_blocks)
-    url_status = await _resolve_urls(same_as_urls)
+    probe_results = await _resolve_urls(same_as_urls)
+    url_status = {u: status == "ok" for u, status in probe_results.items()}
+    inconclusive_urls = {u for u, status in probe_results.items() if status == "inconclusive"}
 
     return evaluate_schema_blocks(
         raw_blocks,
@@ -541,6 +686,7 @@ async def validate_schema(fetch: FetchResult) -> SchemaResult:
         server_rendered=server_rendered,
         is_homepage=is_homepage,
         url_status=url_status,
+        inconclusive_sameas_urls=inconclusive_urls,
     )
 
 
@@ -555,13 +701,19 @@ def _extract_jsonld_blocks(soup: BeautifulSoup) -> list[str]:
 
 
 def _detect_microdata(soup: BeautifulSoup) -> bool:
-    return soup.find(attrs={"itemscope": True}) is not None or soup.find(attrs={"itemtype": True}) is not None
+    return (
+        soup.find(attrs={"itemscope": True}) is not None
+        or soup.find(attrs={"itemtype": True}) is not None
+    )
 
 
 def _detect_rdfa(soup: BeautifulSoup) -> bool:
     # `typeof`/`vocab` are RDFa-specific; `property` alone is skipped (OpenGraph
     # meta tags also use it and would give false positives).
-    return soup.find(attrs={"typeof": True}) is not None or soup.find(attrs={"vocab": True}) is not None
+    return (
+        soup.find(attrs={"typeof": True}) is not None
+        or soup.find(attrs={"vocab": True}) is not None
+    )
 
 
 def _is_homepage(fetch: FetchResult) -> bool:
@@ -587,31 +739,48 @@ def _collect_sameas_urls(raw_blocks: Sequence[str]) -> list[str]:
     return urls
 
 
-async def _resolve_urls(urls: Sequence[str]) -> dict[str, bool]:
-    """HEAD each URL concurrently -> {url: resolves (final status < 400)}."""
+async def _resolve_urls(urls: Sequence[str]) -> dict[str, str]:
+    """HEAD (falling back to GET) each URL concurrently.
+
+    -> {url: "ok" | "dead" | "inconclusive"}. "inconclusive" means the probe got
+    HTTP 403/429 — bot-blocking, not proof the link itself is broken.
+    """
     if not urls:
         return {}
-    results = await asyncio.gather(*(_head_ok(u) for u in urls))
+    results = await asyncio.gather(*(_probe_sameas(u) for u in urls))
     return dict(zip(urls, results))
 
 
-async def _head_ok(url: str) -> bool:
+async def _probe_sameas(url: str) -> str:
     try:
-        return await asyncio.to_thread(_sync_head_ok, url)
+        return await asyncio.to_thread(_sync_probe_sameas, url)
     except Exception:
-        return False
+        return "dead"
 
 
-def _sync_head_ok(url: str) -> bool:
-    """True if the URL resolves (not 404). Falls back to GET when HEAD is rejected."""
+def _sync_probe_sameas(url: str) -> str:
+    """ "ok" (2xx/3xx), "inconclusive" (403/429), or "dead" (anything else/timeout).
+
+    Falls back to GET when HEAD is rejected (405, or any 4xx/5xx — some anti-bot
+    setups reject HEAD but not GET).
+    """
     try:
-        resp = requests.head(url, allow_redirects=True, timeout=_HEAD_TIMEOUT, headers=_HEAD_HEADERS)
+        resp = requests.head(
+            url, allow_redirects=True, timeout=_HEAD_TIMEOUT, headers=_HEAD_HEADERS
+        )
         if resp.status_code == 405 or resp.status_code >= 400:
             resp = requests.get(
-                url, allow_redirects=True, timeout=_HEAD_TIMEOUT,
-                headers=_HEAD_HEADERS, stream=True,
+                url,
+                allow_redirects=True,
+                timeout=_HEAD_TIMEOUT,
+                headers=_HEAD_HEADERS,
+                stream=True,
             )
             resp.close()
-        return 200 <= resp.status_code < 400
+        if 200 <= resp.status_code < 400:
+            return "ok"
+        if resp.status_code in (403, 429):
+            return "inconclusive"
+        return "dead"
     except requests.RequestException:
-        return False
+        return "dead"

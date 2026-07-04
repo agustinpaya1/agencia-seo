@@ -9,9 +9,9 @@ Location: /llms.txt (root of domain)
 Extended: /llms-full.txt (detailed version)
 """
 
-import sys
 import json
 import re
+import sys
 from urllib.parse import urljoin, urlparse
 
 try:
@@ -79,7 +79,7 @@ def validate_llmstxt(url: str) -> dict:
                 result["issues"].append("Missing description (use '> Brief description')")
 
             # Check for sections (## headings)
-            sections = [l for l in lines if l.startswith("## ")]
+            sections = [line for line in lines if line.startswith("## ")]
             result["section_count"] = len(sections)
             result["has_sections"] = len(sections) > 0
             if not result["has_sections"]:
@@ -91,7 +91,9 @@ def validate_llmstxt(url: str) -> dict:
             result["link_count"] = len(links)
             result["has_links"] = len(links) > 0
             if not result["has_links"]:
-                result["issues"].append("No page links found (use '- [Page Title](url): Description')")
+                result["issues"].append(
+                    "No page links found (use '- [Page Title](url): Description')"
+                )
 
             # Overall format validity
             result["format_valid"] = (
@@ -149,9 +151,13 @@ def generate_llmstxt(url: str, max_pages: int = 30) -> dict:
 
     # Extract site name and description
     title = soup.find("title")
-    site_name = title.get_text(strip=True).split("|")[0].split("-")[0].strip() if title else parsed.netloc
+    site_name = (
+        title.get_text(strip=True).split("|")[0].split("-")[0].strip() if title else parsed.netloc
+    )
     meta_desc = soup.find("meta", attrs={"name": "description"})
-    site_description = meta_desc.get("content", "") if meta_desc else f"Official website of {site_name}"
+    site_description = (
+        meta_desc.get("content", "") if meta_desc else f"Official website of {site_name}"
+    )
 
     # Discover and categorize pages
     pages = {
@@ -189,9 +195,22 @@ def generate_llmstxt(url: str, max_pages: int = 30) -> dict:
 
         if any(kw in path for kw in ["/pricing", "/feature", "/product", "/solution", "/demo"]):
             pages["Products & Services"].append(page_entry)
-        elif any(kw in path for kw in ["/blog", "/article", "/resource", "/guide", "/learn", "/docs", "/documentation"]):
+        elif any(
+            kw in path
+            for kw in [
+                "/blog",
+                "/article",
+                "/resource",
+                "/guide",
+                "/learn",
+                "/docs",
+                "/documentation",
+            ]
+        ):
             pages["Resources & Blog"].append(page_entry)
-        elif any(kw in path for kw in ["/about", "/team", "/career", "/contact", "/press", "/partner"]):
+        elif any(
+            kw in path for kw in ["/about", "/team", "/career", "/contact", "/press", "/partner"]
+        ):
             pages["Company"].append(page_entry)
         elif any(kw in path for kw in ["/help", "/support", "/faq", "/status"]):
             pages["Support"].append(page_entry)
@@ -222,12 +241,14 @@ def generate_llmstxt(url: str, max_pages: int = 30) -> dict:
             llms_lines.append("")
 
     # Add contact section placeholder
-    llms_lines.extend([
-        "## Contact",
-        f"- Website: {base_url}",
-        f"- Email: contact@{parsed.netloc}",
-        "",
-    ])
+    llms_lines.extend(
+        [
+            "## Contact",
+            f"- Website: {base_url}",
+            f"- Email: contact@{parsed.netloc}",
+            "",
+        ]
+    )
 
     result["generated_llmstxt"] = "\n".join(llms_lines)
 
@@ -261,12 +282,14 @@ def generate_llmstxt(url: str, max_pages: int = 30) -> dict:
                     full_lines.append(f"- [{page['title']}]({page['url']})")
             full_lines.append("")
 
-    full_lines.extend([
-        "## Contact",
-        f"- Website: {base_url}",
-        f"- Email: contact@{parsed.netloc}",
-        "",
-    ])
+    full_lines.extend(
+        [
+            "## Contact",
+            f"- Website: {base_url}",
+            f"- Email: contact@{parsed.netloc}",
+            "",
+        ]
+    )
 
     result["generated_llmstxt_full"] = "\n".join(full_lines)
     result["sections"] = {k: len(v) for k, v in pages.items()}

@@ -23,61 +23,65 @@ def _check(result, cid):
 # --------------------------------------------------------------------------- #
 # Fixtures — representative JSON-LD blocks
 # --------------------------------------------------------------------------- #
-COMPLETE_JSONLD = json.dumps({
-    "@context": "https://schema.org",
-    "@graph": [
-        {
-            "@type": "Organization",
-            "@id": "https://example.com/#org",
-            "name": "Example Corp",
-            "url": "https://example.com",
-            "logo": {"@type": "ImageObject", "url": "https://example.com/logo.png"},
-            "description": "We build example things.",
-            "foundingDate": "2015-04-01",
-            "sameAs": [
-                "https://en.wikipedia.org/wiki/Example",
-                "https://www.linkedin.com/company/example",
-                "https://twitter.com/example",
-                "https://github.com/example",
-                "https://www.youtube.com/@example",
-            ],
-            "knowsAbout": ["SEO", "GEO", "Structured Data"],
-        },
-        {
-            "@type": "WebSite",
-            "url": "https://example.com",
-            "name": "Example",
-            "potentialAction": {
-                "@type": "SearchAction",
-                "target": "https://example.com/search?q={q}",
-                "query-input": "required name=q",
+COMPLETE_JSONLD = json.dumps(
+    {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "Organization",
+                "@id": "https://example.com/#org",
+                "name": "Example Corp",
+                "url": "https://example.com",
+                "logo": {"@type": "ImageObject", "url": "https://example.com/logo.png"},
+                "description": "We build example things.",
+                "foundingDate": "2015-04-01",
+                "sameAs": [
+                    "https://en.wikipedia.org/wiki/Example",
+                    "https://www.linkedin.com/company/example",
+                    "https://twitter.com/example",
+                    "https://github.com/example",
+                    "https://www.youtube.com/@example",
+                ],
+                "knowsAbout": ["SEO", "GEO", "Structured Data"],
             },
-        },
-        {
-            "@type": "Article",
-            "headline": "How GEO works",
-            "datePublished": "2026-01-01",
-            "dateModified": "2026-02-01",
-            "speakable": {"@type": "SpeakableSpecification", "cssSelector": [".summary"]},
-            "author": {
-                "@type": "Person",
-                "name": "Jane Doe",
-                "url": "https://example.com/authors/jane",
-                "sameAs": "https://www.linkedin.com/in/janedoe",
-                "jobTitle": "Head of SEO",
+            {
+                "@type": "WebSite",
+                "url": "https://example.com",
+                "name": "Example",
+                "potentialAction": {
+                    "@type": "SearchAction",
+                    "target": "https://example.com/search?q={q}",
+                    "query-input": "required name=q",
+                },
             },
-        },
-    ],
-})
+            {
+                "@type": "Article",
+                "headline": "How GEO works",
+                "datePublished": "2026-01-01",
+                "dateModified": "2026-02-01",
+                "speakable": {"@type": "SpeakableSpecification", "cssSelector": [".summary"]},
+                "author": {
+                    "@type": "Person",
+                    "name": "Jane Doe",
+                    "url": "https://example.com/authors/jane",
+                    "sameAs": "https://www.linkedin.com/in/janedoe",
+                    "jobTitle": "Head of SEO",
+                },
+            },
+        ],
+    }
+)
 
 # Organization present but missing a required property (`logo`) and short on
 # recommended props -> "basic", not "complete".
-MISSING_REQUIRED_JSONLD = json.dumps({
-    "@context": "https://schema.org",
-    "@type": "Organization",
-    "name": "Bare Corp",
-    "url": "https://bare.example",
-})
+MISSING_REQUIRED_JSONLD = json.dumps(
+    {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "name": "Bare Corp",
+        "url": "https://bare.example",
+    }
+)
 
 # Syntactically broken JSON-LD (trailing comma, so json.loads raises).
 MALFORMED_JSONLD = '{"@context": "https://schema.org", "@type": "Organization", "name": "Oops",}'
@@ -123,6 +127,27 @@ class TestCompleteSchema:
         }
         result = evaluate_schema_blocks([COMPLETE_JSONLD], is_homepage=True, url_status=url_status)
         assert _check(result, "sameas-links").points == 12.0
+
+    def test_sameas_403_429_is_inconclusive_not_dead(self):
+        # A 403/429 probe means the bot got blocked, not that the link is dead:
+        # it must keep its 3 points and NOT show up in the "dead" note.
+        url_status = {
+            "https://en.wikipedia.org/wiki/Example": True,
+            "https://www.linkedin.com/company/example": False,  # 403, bot-blocked
+            "https://twitter.com/example": True,
+            "https://github.com/example": True,
+            "https://www.youtube.com/@example": False,  # 404, genuinely dead
+        }
+        result = evaluate_schema_blocks(
+            [COMPLETE_JSONLD],
+            is_homepage=True,
+            url_status=url_status,
+            inconclusive_sameas_urls={"https://www.linkedin.com/company/example"},
+        )
+        check = _check(result, "sameas-links")
+        assert check.points == 12.0  # 4/5 count: 3 confirmed + 1 blocked, only 1 genuinely dead
+        assert not any("linkedin" in n and "No resuelven" in n for n in check.notes)
+        assert any("linkedin" in n and "403/429" in n for n in check.notes)
 
 
 # --------------------------------------------------------------------------- #

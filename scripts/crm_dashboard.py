@@ -9,27 +9,22 @@ Usage:
     python crm_dashboard.py --refresh           # Aggiorna + mostra
 """
 
+import argparse
 import json
 import sys
-import os
-import argparse
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 try:
-    from rich.console import Console
-    from rich.table import Table
-    from rich.panel import Panel
-    from rich.columns import Columns
-    from rich.text import Text
-    from rich.rule import Rule
-    from rich.layout import Layout
-    from rich.align import Align
     from rich import box
-    from rich.progress import Progress, BarColumn, TextColumn
-    from rich.padding import Padding
-    from rich.style import Style
+    from rich.align import Align
+    from rich.columns import Columns
+    from rich.console import Console
     from rich.markup import escape
+    from rich.panel import Panel
+    from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
 except ImportError:
     print("ERROR: rich is required. Run: pip install rich")
     sys.exit(1)
@@ -43,24 +38,26 @@ console = Console()
 
 # ── Color helpers ──────────────────────────────────────────────────────
 STATUS_STYLE = {
-    "lead":     ("⬜", "dim white",       "grey50"),
-    "audit":    ("🔍", "bold yellow",     "yellow"),
-    "proposal": ("📄", "bold cyan",       "cyan"),
-    "active":   ("✅", "bold green",      "green"),
-    "churned":  ("❌", "dim red",         "red"),
-    "lost":     ("💀", "dim red",         "red"),
+    "lead": ("⬜", "dim white", "grey50"),
+    "audit": ("🔍", "bold yellow", "yellow"),
+    "proposal": ("📄", "bold cyan", "cyan"),
+    "active": ("✅", "bold green", "green"),
+    "churned": ("❌", "dim red", "red"),
+    "lost": ("💀", "dim red", "red"),
 }
+
 
 def score_style(score: int) -> tuple[str, str]:
     """Returns (color, label) based on GEO score."""
     if score >= 80:
-        return "bold green",  "GOOD"
+        return "bold green", "GOOD"
     elif score >= 60:
-        return "bold blue",   "MODERATE"
+        return "bold blue", "MODERATE"
     elif score >= 40:
-        return "bold yellow",  "POOR"
+        return "bold yellow", "POOR"
     else:
-        return "bold red",    "CRITICAL"
+        return "bold red", "CRITICAL"
+
 
 def score_bar(score: int, width: int = 20) -> Text:
     """Renders a colored progress bar for a score."""
@@ -72,6 +69,7 @@ def score_bar(score: int, width: int = 20) -> Text:
     bar.append("░" * empty, style="grey30")
     bar.append(f" {score}/100", style=color)
     return bar
+
 
 def format_eur(value: int | None) -> str:
     if not value:
@@ -100,27 +98,21 @@ def view_summary(prospects: list[dict]):
     cards = [
         Panel(
             Align.center(
-                Text.from_markup(
-                    f"[bold white]{total}[/bold white]\n[dim]Total Prospects[/dim]"
-                )
+                Text.from_markup(f"[bold white]{total}[/bold white]\n[dim]Total Prospects[/dim]")
             ),
             border_style="bright_blue",
             padding=(1, 3),
         ),
         Panel(
             Align.center(
-                Text.from_markup(
-                    f"[bold green]{active}[/bold green]\n[dim]Active Clients[/dim]"
-                )
+                Text.from_markup(f"[bold green]{active}[/bold green]\n[dim]Active Clients[/dim]")
             ),
             border_style="green",
             padding=(1, 3),
         ),
         Panel(
             Align.center(
-                Text.from_markup(
-                    f"[bold cyan]{format_eur(mrr)}[/bold cyan]\n[dim]MRR[/dim]"
-                )
+                Text.from_markup(f"[bold cyan]{format_eur(mrr)}[/bold cyan]\n[dim]MRR[/dim]")
             ),
             border_style="cyan",
             padding=(1, 3),
@@ -159,23 +151,23 @@ def view_prospect_table(prospects: list[dict]):
         padding=(0, 1),
     )
 
-    table.add_column("ID",         style="dim", width=9)
-    table.add_column("Company",    style="bold white", min_width=16)
-    table.add_column("Domain",     style="cyan", min_width=18)
-    table.add_column("Status",     justify="center", min_width=12)
-    table.add_column("GEO Score",  justify="left", min_width=26)
-    table.add_column("Audit",      justify="center", min_width=12)
-    table.add_column("MRR",        justify="right", min_width=10)
-    table.add_column("Proposal",   justify="center", min_width=10)
+    table.add_column("ID", style="dim", width=9)
+    table.add_column("Company", style="bold white", min_width=16)
+    table.add_column("Domain", style="cyan", min_width=18)
+    table.add_column("Status", justify="center", min_width=12)
+    table.add_column("GEO Score", justify="left", min_width=26)
+    table.add_column("Audit", justify="center", min_width=12)
+    table.add_column("MRR", justify="right", min_width=10)
+    table.add_column("Proposal", justify="center", min_width=10)
 
     for p in sorted(prospects, key=lambda x: x.get("geo_score", 0)):
-        pid     = p.get("id", "—")
+        pid = p.get("id", "—")
         company = p.get("company", "—")
-        domain  = p.get("domain", "—")
-        status  = p.get("status", "lead")
-        score   = p.get("geo_score", 0)
-        audit   = p.get("audit_date", "—")
-        mrr     = format_eur(p.get("monthly_value"))
+        domain = p.get("domain", "—")
+        status = p.get("status", "lead")
+        score = p.get("geo_score", 0)
+        audit = p.get("audit_date", "—")
+        mrr = format_eur(p.get("monthly_value"))
         has_proposal = "✓" if p.get("proposal_file") else "—"
 
         icon, status_style, _ = STATUS_STYLE.get(status, ("?", "white", "white"))
@@ -327,9 +319,7 @@ def main():
         console.print()
         view_pipeline(prospects)
 
-    console.print(
-        f"[dim]CRM: {CRM_PATH}   |   /geo audit <domain> to add prospects[/dim]\n"
-    )
+    console.print(f"[dim]CRM: {CRM_PATH}   |   /geo audit <domain> to add prospects[/dim]\n")
 
 
 if __name__ == "__main__":

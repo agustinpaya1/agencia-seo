@@ -19,6 +19,7 @@ rich = "^13.0.0"
 fastapi = {extras = ["standard"], version = "^0.115.0"}
 pymongo = "^4.17.0"
 python-dotenv = "^1.2.2"
+wappalyzer = "^2.0.1"
 
 [build-system]
 requires = ["poetry-core"]

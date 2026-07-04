@@ -48,9 +48,18 @@ _SSR_LINKS = 3 / 15 * 100
 
 # AI crawler user-agents whose robots.txt access matters most for GEO (SKILL 1.2).
 _AI_AGENTS = {
-    "gptbot", "oai-searchbot", "chatgpt-user", "perplexitybot", "claudebot",
-    "anthropic-ai", "ccbot", "google-extended", "bytespider", "applebot-extended",
-    "amazonbot", "facebookbot",
+    "gptbot",
+    "oai-searchbot",
+    "chatgpt-user",
+    "perplexitybot",
+    "claudebot",
+    "anthropic-ai",
+    "ccbot",
+    "google-extended",
+    "bytespider",
+    "applebot-extended",
+    "amazonbot",
+    "facebookbot",
 }
 
 
@@ -102,10 +111,14 @@ def _score_ssr(
     fetch: FetchResult, soup: BeautifulSoup | None, html: str, stack: TechStackResult
 ) -> WeightedDimension:
     if not html or soup is None:
-        return _dim("ssr", 0.0, [
-            "Sin HTML servido (sitio no alcanzable o respuesta vacía): un crawler "
-            "sin JavaScript no vería contenido alguno."
-        ])
+        return _dim(
+            "ssr",
+            0.0,
+            [
+                "Sin HTML servido (sitio no alcanzable o respuesta vacía): un crawler "
+                "sin JavaScript no vería contenido alguno."
+            ],
+        )
 
     score = 0.0
     findings: list[str] = []
@@ -114,7 +127,9 @@ def _score_ssr(
     has_body, word_count, csr_notes = main_content_server_rendered(html)
     if has_body:
         score += _SSR_MAIN
-        findings.append(f"Contenido principal presente en el HTML servido (~{word_count} palabras).")
+        findings.append(
+            f"Contenido principal presente en el HTML servido (~{word_count} palabras)."
+        )
     else:
         findings.append(
             f"El contenido principal NO está en el HTML servido (~{word_count} palabras): "
@@ -125,14 +140,21 @@ def _score_ssr(
 
     # 1b. Meta tags in the raw HTML (title carries most of the weight).
     has_title = _has_title(soup)
-    has_meta_extra = _meta_name_present(soup, "description") or _find_canonical(soup) is not None \
+    has_meta_extra = (
+        _meta_name_present(soup, "description")
+        or _find_canonical(soup) is not None
         or soup.find("meta", attrs={"property": re.compile(r"^og:", re.I)}) is not None
+    )
     meta_score = _SSR_META * (0.6 * has_title + 0.4 * has_meta_extra)
     score += meta_score
     if has_title and has_meta_extra:
-        findings.append("Meta tags (title + description/canonical/OpenGraph) presentes en el HTML servido.")
+        findings.append(
+            "Meta tags (title + description/canonical/OpenGraph) presentes en el HTML servido."
+        )
     elif has_title:
-        findings.append("Title presente en el HTML servido, pero falta description/canonical/OpenGraph.")
+        findings.append(
+            "Title presente en el HTML servido, pero falta description/canonical/OpenGraph."
+        )
     else:
         findings.append("Sin <title> en el HTML servido.")
 
@@ -147,20 +169,29 @@ def _score_ssr(
     internal = _count_internal_links(soup, fetch)
     if internal >= 5:
         score += _SSR_LINKS
-        findings.append(f"{internal} enlaces internos en el HTML servido (ruta de rastreo presente).")
+        findings.append(
+            f"{internal} enlaces internos en el HTML servido (ruta de rastreo presente)."
+        )
     elif internal >= 1:
         score += _SSR_LINKS * 0.5
-        findings.append(f"Solo {internal} enlaces internos en el HTML servido (ruta de rastreo pobre).")
+        findings.append(
+            f"Solo {internal} enlaces internos en el HTML servido (ruta de rastreo pobre)."
+        )
     else:
-        findings.append("Sin enlaces internos en el HTML servido: el rastreador no puede descubrir más páginas.")
+        findings.append(
+            "Sin enlaces internos en el HTML servido: el rastreador no puede descubrir más páginas."
+        )
 
     # Stack is corroborating context, not a score override: the HTML is what the
     # crawler actually sees, so it stays authoritative for SSR.
     stack_names = _stack_names(stack)
     ssr_stack = bool(stack.cms) or bool(
-        stack_names & {"next.js", "nuxt", "nuxt.js", "gatsby", "remix", "sveltekit", "angular universal"}
+        stack_names
+        & {"next.js", "nuxt", "nuxt.js", "gatsby", "remix", "sveltekit", "angular universal"}
     )
-    spa_stack = bool(stack_names & {"react", "vue", "vue.js", "angular", "svelte"}) and not ssr_stack
+    spa_stack = (
+        bool(stack_names & {"react", "vue", "vue.js", "angular", "svelte"}) and not ssr_stack
+    )
     if not has_body and ssr_stack:
         findings.append(
             "Nota: el stack detectado sugiere render de servidor (CMS/framework SSR), pero el "
@@ -168,7 +199,9 @@ def _score_ssr(
             "puntúa lo que ve el crawler."
         )
     elif spa_stack and has_body:
-        findings.append("Nota: framework SPA detectado, pero el contenido sí aparece server-rendered.")
+        findings.append(
+            "Nota: framework SPA detectado, pero el contenido sí aparece server-rendered."
+        )
 
     return _dim("ssr", score, findings)
 
@@ -176,7 +209,9 @@ def _score_ssr(
 # --------------------------------------------------------------------------- #
 # 2. Meta / Indexability (15%) — SKILL Category 2 + noindex management (1.5)
 # --------------------------------------------------------------------------- #
-def _score_meta_indexability(soup: BeautifulSoup | None, headers_ci: dict[str, str]) -> WeightedDimension:
+def _score_meta_indexability(
+    soup: BeautifulSoup | None, headers_ci: dict[str, str]
+) -> WeightedDimension:
     if soup is None:
         return _dim("meta_indexability", 0.0, ["Sin HTML servido: indexabilidad no evaluable."])
 
@@ -189,7 +224,9 @@ def _score_meta_indexability(soup: BeautifulSoup | None, headers_ci: dict[str, s
     noindex = "noindex" in robots_content or "noindex" in x_robots
 
     if noindex:
-        findings.append("La página declara noindex (meta robots / X-Robots-Tag): no será indexada ni citada.")
+        findings.append(
+            "La página declara noindex (meta robots / X-Robots-Tag): no será indexada ni citada."
+        )
     else:
         score += 60.0
         findings.append("Indexable (sin directiva noindex).")
@@ -199,7 +236,9 @@ def _score_meta_indexability(soup: BeautifulSoup | None, headers_ci: dict[str, s
         score += 40.0
         findings.append(f"Etiqueta canonical presente: {canonical}")
     else:
-        findings.append("Sin etiqueta canonical: riesgo de contenido duplicado / dilución de señales.")
+        findings.append(
+            "Sin etiqueta canonical: riesgo de contenido duplicado / dilución de señales."
+        )
 
     findings.append(
         "Nota: duplicados www/http, paginación, hreflang e index bloat requieren varias URLs "
@@ -223,7 +262,9 @@ def _score_crawlability(fetch: FetchResult) -> WeightedDimension:
     if not robots:
         # No robots.txt = everything crawlable by default (not a block).
         score += 25.0 + 35.0
-        findings.append("Sin robots.txt: todo crawlable por defecto. Recomendable añadirlo con la referencia al sitemap.")
+        findings.append(
+            "Sin robots.txt: todo crawlable por defecto. Recomendable añadirlo con la referencia al sitemap."
+        )
         sitemap_in_robots = False
     else:
         score += 20.0
@@ -232,7 +273,9 @@ def _score_crawlability(fetch: FetchResult) -> WeightedDimension:
         sitemap_in_robots = signals["sitemap_referenced"]
 
         if signals["googlebot_blocked"]:
-            findings.append("FATAL: robots.txt bloquea Googlebot (Disallow: /). Sin indexación en Google ni AI Overviews.")
+            findings.append(
+                "FATAL: robots.txt bloquea Googlebot (Disallow: /). Sin indexación en Google ni AI Overviews."
+            )
         else:
             score += 25.0
             findings.append("Googlebot permitido.")
@@ -244,7 +287,11 @@ def _score_crawlability(fetch: FetchResult) -> WeightedDimension:
         else:
             ratio = 1 - len(blocked_ai) / len(_AI_AGENTS)
             score += 35.0 * max(0.0, ratio)
-            findings.append("Crawlers de IA bloqueados en robots.txt: " + ", ".join(blocked_ai) + " (impacto GEO).")
+            findings.append(
+                "Crawlers de IA bloqueados en robots.txt: "
+                + ", ".join(blocked_ai)
+                + " (impacto GEO)."
+            )
 
     if has_sitemap or sitemap_in_robots:
         score += 20.0
@@ -252,7 +299,9 @@ def _score_crawlability(fetch: FetchResult) -> WeightedDimension:
     else:
         findings.append("Sin sitemap XML localizado (ni en robots.txt ni en sitemap_urls).")
 
-    findings.append("Nota: profundidad de rastreo (≤3 clics) requiere varias páginas; no se evalúa aquí.")
+    findings.append(
+        "Nota: profundidad de rastreo (≤3 clics) requiere varias páginas; no se evalúa aquí."
+    )
     return _dim("crawlability", score, findings)
 
 
@@ -293,7 +342,9 @@ def _score_security_headers(fetch: FetchResult, headers_ci: dict[str, str]) -> W
     if missing:
         findings.append("Cabeceras de seguridad ausentes: " + ", ".join(missing) + ".")
 
-    findings.append("Estimación desde las cabeceras del fetch; el veredicto autoritativo (Observatory/CVEs) lo da security.py.")
+    findings.append(
+        "Estimación desde las cabeceras del fetch; el veredicto autoritativo (Observatory/CVEs) lo da security.py."
+    )
     return _dim("security_headers_estimate", score, findings)
 
 
@@ -312,14 +363,17 @@ def _score_cwv_static(soup: BeautifulSoup | None, stack: TechStackResult) -> Wei
     cls_ratio = dimensioned / len(imgs) if imgs else 1.0
     cls_score = 40.0 * cls_ratio
     if imgs:
-        findings.append(f"CLS: {dimensioned}/{len(imgs)} imágenes con width+height explícitos (reservan espacio).")
+        findings.append(
+            f"CLS: {dimensioned}/{len(imgs)} imágenes con width+height explícitos (reservan espacio)."
+        )
     else:
         findings.append("CLS: sin imágenes; sin riesgo de desplazamiento por imagen.")
 
     # INP/LCP proxy (35): render-blocking scripts in <head> (no async/defer).
     head = soup.find("head")
     blocking = [
-        s for s in (head.find_all("script") if head else [])
+        s
+        for s in (head.find_all("script") if head else [])
         if s.get("src") and not (s.has_attr("async") or s.has_attr("defer"))
     ]
     n_block = len(blocking)
@@ -357,13 +411,17 @@ def _score_mobile(soup: BeautifulSoup | None) -> WeightedDimension:
     content = (viewport.get("content", "") if viewport else "").lower()
 
     if not viewport:
-        findings.append("Sin meta viewport: no optimizada para móvil (Google indexa mobile-first desde julio 2024).")
+        findings.append(
+            "Sin meta viewport: no optimizada para móvil (Google indexa mobile-first desde julio 2024)."
+        )
         score = 0.0
     elif "width=device-width" in content:
         score = 100.0
         findings.append("Meta viewport responsive (width=device-width) presente.")
         if "user-scalable=no" in content or "maximum-scale=1" in content.replace(" ", ""):
-            findings.append("Aviso de accesibilidad: el viewport bloquea el zoom (user-scalable=no / maximum-scale=1).")
+            findings.append(
+                "Aviso de accesibilidad: el viewport bloquea el zoom (user-scalable=no / maximum-scale=1)."
+            )
     else:
         score = 30.0
         findings.append(f"Meta viewport presente pero no responsive (content={content!r}).")
@@ -404,17 +462,25 @@ def _score_url_structure(fetch: FetchResult) -> WeightedDimension:
     if not re.search(r"(?:^|&)(session|sid|sessionid|phpsessid|jsessionid|id)=", query, re.I):
         score += 25.0
     else:
-        findings.append("Query con parámetros de sesión/ID que pueden generar duplicados indexables.")
+        findings.append(
+            "Query con parámetros de sesión/ID que pueden generar duplicados indexables."
+        )
 
     depth = len([seg for seg in path.split("/") if seg])
     if depth <= 4:
         score += 25.0
     else:
-        findings.append(f"Jerarquía profunda ({depth} niveles); preferible ≤4 para presupuesto de rastreo.")
+        findings.append(
+            f"Jerarquía profunda ({depth} niveles); preferible ≤4 para presupuesto de rastreo."
+        )
 
     if score == 100.0:
-        findings.append("URL limpia: minúsculas, sin guiones bajos, sin IDs de sesión, jerarquía razonable.")
-    findings.append("Nota: cadenas de redirección no se evalúan (FetchResult no expone el historial de saltos).")
+        findings.append(
+            "URL limpia: minúsculas, sin guiones bajos, sin IDs de sesión, jerarquía razonable."
+        )
+    findings.append(
+        "Nota: cadenas de redirección no se evalúan (FetchResult no expone el historial de saltos)."
+    )
     return _dim("url_structure", score, findings)
 
 

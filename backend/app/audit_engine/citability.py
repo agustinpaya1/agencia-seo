@@ -5,13 +5,37 @@ formula without rewriting it, and maps the output onto :class:`CitabilityResult`
 This is the 5th category of the final weighted score.
 """
 
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
 from .models import CitabilityResult, FetchResult
+
+_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+
+from citability_scorer import analyze_html_citability  # noqa: E402
 
 
 def score_citability(fetch: FetchResult) -> CitabilityResult:
     """Score the page's AI citability by wrapping the existing scorer.
 
-    Delegates to scripts/citability_scorer.py (unchanged) and adapts its
-    page-level metrics into a :class:`CitabilityResult`.
+    Delegates to :func:`citability_scorer.analyze_html_citability` with the
+    HTML from ``fetch`` (task 7, parte B: the scorer used to re-fetch the URL
+    itself, which risked scoring a different snapshot of the page than the rest
+    of the audit engine — now it scores exactly what ``fetch`` already has).
     """
-    raise NotImplementedError
+    html = fetch.html or ""
+    if not html:
+        return CitabilityResult(notes=["Sin HTML disponible: no se pudo evaluar citabilidad."])
+
+    report = analyze_html_citability(html, url=fetch.final_url or fetch.domain)
+
+    return CitabilityResult(
+        score=report["average_citability_score"],
+        blocks_analyzed=report["total_blocks_analyzed"],
+        optimal_length_passages=report["optimal_length_passages"],
+        grade_distribution=report["grade_distribution"],
+    )

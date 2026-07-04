@@ -21,9 +21,9 @@ Contributed by Millisa Nwokolo (La Crown Inc.) as a thank-you, built on top of
 the GEO-SEO Claude engine by Zubair Trabzada. MIT licensed.
 """
 
+import copy
 import json
 import os
-import copy
 
 DEFAULT_BRAND = {
     "name": "Your Agency",
@@ -32,16 +32,16 @@ DEFAULT_BRAND = {
     "phone": "",
     "contact_name": "",
     "colors": {
-        "primary":        "#E8A87C",   # headers, accents
-        "primary_bright": "#F0B98A",   # hover/highlight variant
-        "secondary":      "#E94560",   # gauges, CTAs
-        "bg_deep":        "#0A0A0F",
-        "bg_dark":        "#111118",
-        "bg_card":        "#1A1A28",
-        "border":         "#2A2A3A",
-        "text_primary":   "#F0EDE8",
+        "primary": "#E8A87C",  # headers, accents
+        "primary_bright": "#F0B98A",  # hover/highlight variant
+        "secondary": "#E94560",  # gauges, CTAs
+        "bg_deep": "#0A0A0F",
+        "bg_dark": "#111118",
+        "bg_card": "#1A1A28",
+        "border": "#2A2A3A",
+        "text_primary": "#F0EDE8",
         "text_secondary": "#A09898",
-        "text_accent":    "#E8A87C",
+        "text_accent": "#E8A87C",
     },
 }
 
@@ -65,5 +65,6 @@ def load_brand(config_path=None):
 
 if __name__ == "__main__":
     import sys
+
     path = sys.argv[1] if len(sys.argv) > 1 else None
     print(json.dumps(load_brand(path), indent=2))

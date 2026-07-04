@@ -1,14 +1,16 @@
 import os
 from contextlib import asynccontextmanager
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import AsyncMongoClient
 from pymongo.server_api import ServerApi
-from dotenv import load_dotenv
 
 load_dotenv()
 
-from .api.router import api_router
+from .api.router import api_router  # noqa: E402
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -21,6 +23,7 @@ async def lifespan(app: FastAPI):
     finally:
         await client.close()
 
+
 app = FastAPI(title="GEO-SEO CRM API", lifespan=lifespan)
 
 app.add_middleware(
@@ -32,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+
 
 @app.get("/health", tags=["Health"])
 def health_check():

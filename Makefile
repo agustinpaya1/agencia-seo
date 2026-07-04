@@ -9,8 +9,10 @@ help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-install: ## Install all dependencies (incl. dev group)
+install: ## Install all dependencies (incl. dev group), Chromium, and the Lighthouse CLI
 	poetry install
+	poetry run playwright install chromium
+	npm install
 
 test: ## Run the test suite
 	poetry run pytest

@@ -1,0 +1,8 @@
+{
+  "name": "agencia-seo",
+  "private": true,
+  "description": "Root-level JS tooling for the audit engine (Lighthouse CLI). The Next.js app lives in frontend/ with its own package.json.",
+  "dependencies": {
+    "lighthouse": "^13.4.0"
+  }
+}

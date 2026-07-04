@@ -46,7 +46,10 @@ def make_fetch(
 
 
 def make_stack(
-    *, identified: bool = False, technologies: list | None = None, cms: str | None = None,
+    *,
+    identified: bool = False,
+    technologies: list | None = None,
+    cms: str | None = None,
     behind_cdn: bool = False,
 ) -> TechStackResult:
     return TechStackResult(
@@ -61,7 +64,9 @@ def dim(result, name):
     for d in result.dimensions:
         if d.name == name:
             return d
-    raise AssertionError(f"dimension not found: {name} (have {[d.name for d in result.dimensions]})")
+    raise AssertionError(
+        f"dimension not found: {name} (have {[d.name for d in result.dimensions]})"
+    )
 
 
 SECURITY_HEADERS = {
@@ -208,7 +213,9 @@ class TestCrawlability:
 
     def test_no_robots_is_default_allowed_not_blocked(self):
         result = score_technical(
-            make_fetch(GOOD_HTML, robots_txt=None, sitemap_urls=["https://example.com/sitemap.xml"]),
+            make_fetch(
+                GOOD_HTML, robots_txt=None, sitemap_urls=["https://example.com/sitemap.xml"]
+            ),
             make_stack(),
         )
         crawl = dim(result, "crawlability")
@@ -257,7 +264,9 @@ class TestMobile:
         assert dim(score_technical(make_fetch(GOOD_HTML), make_stack()), "mobile").score == 100.0
 
     def test_no_viewport_zero(self):
-        html = GOOD_HTML.replace('<meta name="viewport" content="width=device-width, initial-scale=1">', "")
+        html = GOOD_HTML.replace(
+            '<meta name="viewport" content="width=device-width, initial-scale=1">', ""
+        )
         result = score_technical(make_fetch(html), make_stack())
         assert dim(result, "mobile").score == 0.0
 
@@ -274,7 +283,9 @@ class TestUrlAndStatus:
         assert dim(result, "url_structure").score <= 50.0
 
     def test_clean_homepage_full(self):
-        result = score_technical(make_fetch(GOOD_HTML, final_url="https://example.com/"), make_stack())
+        result = score_technical(
+            make_fetch(GOOD_HTML, final_url="https://example.com/"), make_stack()
+        )
         assert dim(result, "url_structure").score == 100.0
 
     def test_server_error_status(self):
@@ -292,7 +303,11 @@ class TestUrlAndStatus:
 def test_spa_stack_noted_when_content_present():
     stack = make_stack(
         identified=True,
-        technologies=[DetectedTechnology(name="React", categories=["JavaScript frameworks"], confidence=Confidence.HIGH)],
+        technologies=[
+            DetectedTechnology(
+                name="React", categories=["JavaScript frameworks"], confidence=Confidence.HIGH
+            )
+        ],
     )
     result = score_technical(make_fetch(GOOD_HTML), stack)
     assert any("SPA" in f for f in dim(result, "ssr").findings)

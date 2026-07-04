@@ -6,9 +6,9 @@ framework-style root divs (id="app", id="root") but serving full HTML via
 SSR/prerendering were incorrectly flagged as client-side-only.
 """
 
-import sys
 import os
-from unittest.mock import patch, MagicMock
+import sys
+from unittest.mock import MagicMock, patch
 
 # Ensure scripts/ is importable from the worktree
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
@@ -150,6 +150,7 @@ NO_FRAMEWORK_HTML = """<!DOCTYPE html>
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestSSRDetectionNonFrameworkSites:
     """Pages with no framework root divs should never be flagged."""
 
@@ -179,9 +180,7 @@ class TestSSRDetectionFalsePositives:
     def test_wordpress_bricks_no_csr_error(self):
         result = _fetch_with_html(WORDPRESS_BRICKS_HTML)
         csr_errors = [e for e in result["errors"] if "client-side" in e.lower()]
-        assert csr_errors == [], (
-            f"Unexpected CSR errors for WordPress site: {csr_errors}"
-        )
+        assert csr_errors == [], f"Unexpected CSR errors for WordPress site: {csr_errors}"
 
     def test_litespeed_cache_not_flagged(self):
         result = _fetch_with_html(LITESPEED_CACHE_HTML)
@@ -241,9 +240,7 @@ class TestSSRWordCountReported:
     def test_csr_error_includes_word_count(self):
         result = _fetch_with_html(TRUE_CSR_SHELL_HTML)
         csr_errors = [e for e in result["errors"] if "client-side" in e.lower()]
-        assert any("word" in e for e in csr_errors), (
-            "CSR error should mention word count"
-        )
+        assert any("word" in e for e in csr_errors), "CSR error should mention word count"
 
 
 class TestSSRDecomposeOrderIndependence:

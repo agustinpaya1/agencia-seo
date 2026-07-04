@@ -3,9 +3,9 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 app = FastAPI(title="GEO-SEO CRM API")
@@ -80,9 +80,7 @@ def crm_stats(prospects: list[dict]) -> dict:
     proposals = [p for p in prospects if p.get("status") == "proposal"]
     mrr = sum(p.get("monthly_value", 0) for p in active)
     pipeline = sum(p.get("monthly_value", 0) for p in proposals)
-    avg_score = (
-        round(sum(p.get("geo_score", 0) for p in prospects) / total) if total else 0
-    )
+    avg_score = round(sum(p.get("geo_score", 0) for p in prospects) / total) if total else 0
     return {
         "total": total,
         "active": len(active),
@@ -183,9 +181,7 @@ def download_pdf(pid: str):
     if not pdf_path:
         raise HTTPException(status_code=404, detail="PDF not found")
 
-    return FileResponse(
-        path=pdf_path, filename=pdf_path.name, media_type="application/pdf"
-    )
+    return FileResponse(path=pdf_path, filename=pdf_path.name, media_type="application/pdf")
 
 
 def mock_audit_background(pid: str, domain: str):
@@ -243,8 +239,9 @@ def start_audit(data: AuditRequest, background_tasks: BackgroundTasks):
 
 
 if __name__ == "__main__":
-    import uvicorn
     import os
+
+    import uvicorn
 
     debug = os.environ.get("DEBUG", "false").lower() == "true"
     uvicorn.run("app:app", host="127.0.0.1", port=5050, reload=debug)

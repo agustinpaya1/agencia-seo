@@ -1,14 +1,20 @@
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-import uuid
 from datetime import datetime
-from ...models.audit import AuditRequest
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+
 from ...dependencies import get_prospects_collection
+from ...models.audit import AuditRequest
 from ...services.audit import mock_audit_background
 
 router = APIRouter()
 
+
 @router.post("", status_code=202)
-async def start_audit(data: AuditRequest, background_tasks: BackgroundTasks, collection = Depends(get_prospects_collection)):
+async def start_audit(
+    data: AuditRequest,
+    background_tasks: BackgroundTasks,
+    collection=Depends(get_prospects_collection),
+):
     """Starts a new GEO audit for a given URL"""
     url = data.url.strip()
     if not url:
@@ -31,7 +37,7 @@ async def start_audit(data: AuditRequest, background_tasks: BackgroundTasks, col
             }
         ],
     }
-    
+
     result = await collection.insert_one(p)
     inserted_id = result.inserted_id
 
