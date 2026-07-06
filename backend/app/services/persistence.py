@@ -1,10 +1,10 @@
-"""Mongo persistence for the audit engine (task 8, persistence layer only).
+"""Mongo persistence for the audit engine.
 
 The deterministic engine in ``audit_engine/`` never learns that Mongo exists
 (same rule as tasks 4 and 6): all database access lives here, in ``services/``.
-This module is *not* wired into FastAPI yet and does not replace
-``mock_audit_background`` — that is task 8b. It only provides the persistence
-primitives underneath.
+``services/audit.py`` calls :func:`save_audit_result` and injects
+:class:`MongoSnapshotStore` into ``run_audit``; ``main.py`` runs
+:func:`ensure_indexes` at startup.
 
 Two things are persisted:
 
@@ -14,18 +14,27 @@ Two things are persisted:
   applied **in the query** (task 4 decision preserved), and a TTL index for
   housekeeping only (the Mongo TTL sweeper is ~60s-granular, so it is never
   relied on for correctness — the explicit ``$gte`` filter is). Every
-  ``PerformanceResult`` is *also* archived inside its ``AuditResult`` below, so
-  the snapshot collection losing old entries costs no analytics.
+  ``PerformanceResult`` is *also* archived in its category report below, so the
+  snapshot collection losing old entries costs no analytics.
 
-* **Full audit reports** — :func:`save_audit_result` appends the whole
-  :class:`AuditResult` to the ``audits`` collection and denormalises a summary
-  onto the prospect.
+* **Audit runs, split by category** — :func:`save_audit_result` splits one
+  :class:`AuditResult` into a light ``audit_runs`` document (orchestration
+  fields, the reduced fetch metadata, the small score-less ``tech_stack`` and
+  ``keywords`` results, and a ``reports`` map with ``{id, score}`` per scored
+  category) plus one document per scorer category in its own
+  ``audit_reports_*`` collection (:data:`CATEGORY_COLLECTIONS`), queryable by
+  domain history without going through the parent run.
 
-  KNOWN DEBT (conscious decision, task 8): ``audits`` is append-only with no
-  retention policy, and each document embeds the full ``fetch.html`` of the
-  page (corte A of the task-8 proposal — fidelity over size for now).
-  Historical ``fetch.html`` growth is technical debt to revisit when there is
-  real volume, *not* an oversight — truncating/dropping it is a future task.
+  The raw ``fetch.html`` / ``headers`` / ``robots_txt`` are NOT persisted
+  anywhere: the engine only needs them live, nothing ever read them back, and
+  dropping them pays off the old "corte A" append-only-full-html debt. What
+  survives of the fetch is the closed metadata list in
+  :data:`_FETCH_PERSISTED_FIELDS`.
+
+  Insertion order is categories first, run last (see
+  :func:`save_audit_result`): a crash in between leaves harmless orphan
+  category documents that nothing references — never a run whose ``reports``
+  map points at documents that don't exist.
 """
 
 from __future__ import annotations
@@ -34,14 +43,42 @@ import logging
 import os
 from datetime import datetime, timezone
 
-from ..audit_engine.models import AuditResult, PerformanceResult
+from bson import ObjectId
+
+from ..audit_engine.models import AuditResult, FetchResult, PerformanceResult
+from ..audit_engine.orchestrator import performance_score, security_score
 from ..audit_engine.performance import SNAPSHOT_MAX_AGE
-from ..models.prospects import AuditSummary
+from ..models.leads import STATUS_IN_PROGRESS, AuditSummary
 
 logger = logging.getLogger(__name__)
 
-AUDITS_COLLECTION = "audits"
+AUDIT_RUNS_COLLECTION = "audit_runs"
 SNAPSHOTS_COLLECTION = "performance_snapshots"
+
+# One collection per scorer category, keyed by its AuditResult field name (the
+# same keys the `reports` map uses). keywords/tech_stack are NOT here on
+# purpose: they carry no score and stay embedded in the run document.
+CATEGORY_COLLECTIONS: dict[str, str] = {
+    "technical": "audit_reports_technical",
+    "security": "audit_reports_security",
+    "performance": "audit_reports_performance",
+    "schema_org": "audit_reports_schema_org",
+    "citability": "audit_reports_citability",
+}
+
+# The closed list of fetch fields that survive persistence. Everything else in
+# FetchResult (html, headers, robots_txt) is live-only input for the scorers.
+_FETCH_PERSISTED_FIELDS = {"status_code", "final_url", "sitemap_urls", "notes", "fetched_at"}
+
+
+def leads_collection_name() -> str:
+    """Name of the CRM leads collection (env-overridable, default ``leads``).
+
+    The single source of truth for the name: ``dependencies.get_leads_collection``,
+    ``ensure_indexes``, ``services/audit.py`` and the migration script all
+    resolve it here instead of each re-reading the env var.
+    """
+    return os.getenv("MONGODB_LEADS_COLLECTION", "leads")
 
 
 # --------------------------------------------------------------------------- #
@@ -65,20 +102,83 @@ def snapshot_document(domain: str, result: PerformanceResult) -> dict:
     return doc
 
 
-def audit_document(result: AuditResult, *, prospect_id=None) -> dict:
-    """The document appended to ``audits`` for one audit run.
+def fetch_metadata(fetch: FetchResult) -> dict:
+    """The persisted projection of a fetch: metadata only, never the payloads.
 
-    Stores the whole ``AuditResult`` including ``fetch.html`` (corte A: fidelity
-    over size; append-only, see the module known-debt note).
+    ``html``, ``headers`` and ``robots_txt`` are what the scorers consume live;
+    persisting them was the old corte-A debt. ``FetchResult`` itself is not
+    changed — the engine keeps its full in-memory shape.
     """
-    doc = result.model_dump(mode="python")
-    if prospect_id is not None:
-        doc["prospect_id"] = prospect_id
-    return doc
+    return fetch.model_dump(mode="python", include=_FETCH_PERSISTED_FIELDS)
+
+
+def _category_score(name: str, value) -> float | None:
+    """The 0-100 score a category contributes to the run's ``reports`` map.
+
+    technical/schema_org/citability carry their own ``score`` field;
+    security/performance have no score of their own, so the orchestrator's
+    shared normalisers (the same formulas both gates use — determinism intact)
+    are applied here. ``None`` only for performance that ran but measured
+    nothing (the one honest "no data" case).
+    """
+    if name == "security":
+        return security_score(value)
+    if name == "performance":
+        return performance_score(value)
+    return value.score
+
+
+def audit_run_documents(
+    result: AuditResult, *, lead_id=None, run_id=None
+) -> tuple[dict, dict[str, dict]]:
+    """Split one ``AuditResult`` into ``(run_doc, category_docs)``.
+
+    Pure: ObjectIds are pre-generated here (including the run's own ``_id``,
+    overridable via ``run_id`` so the migration can preserve legacy ids and
+    keep ``leads.last_audit_id`` references intact), and the cross-references
+    are already wired — ``run_doc["reports"][cat]["id"] ==
+    category_docs[cat]["_id"]`` and ``category_docs[cat]["audit_id"] ==
+    run_doc["_id"]``. The shell only inserts.
+
+    ``category_docs`` is keyed by category name (:data:`CATEGORY_COLLECTIONS`
+    keys); a category that did not run (``None`` on the result) produces no
+    document and no ``reports`` entry, so an UNREACHABLE audit yields
+    ``reports == {}`` and zero category docs. ``reports[cat]["score"]`` is
+    ``None`` when the category ran but measured nothing (performance).
+
+    ``reports`` ids are stored as native ObjectId (consistent with ``_id`` /
+    ``lead_id`` and directly queryable): any future endpoint returning a raw
+    run document will need a JSON encoder for them, and any future reader must
+    re-attach ``timezone.utc`` to the naive datetimes pymongo returns (see
+    ``_load_performance`` for the precedent).
+    """
+    run_doc = result.model_dump(mode="python")
+    run_doc["_id"] = run_id if run_id is not None else ObjectId()
+    if lead_id is not None:
+        run_doc["lead_id"] = lead_id
+    run_doc["fetch"] = fetch_metadata(result.fetch)
+
+    reports: dict[str, dict] = {}
+    category_docs: dict[str, dict] = {}
+    for name in CATEGORY_COLLECTIONS:
+        payload = run_doc.pop(name)
+        if payload is None:  # submodule failed or never ran -> no doc, no entry
+            continue
+        doc = {
+            "_id": ObjectId(),
+            "audit_id": run_doc["_id"],
+            "domain": result.domain,
+            "computed_at": result.created_at,
+        }
+        doc.update(payload)  # flat payload; *Result fields don't collide (checked)
+        category_docs[name] = doc
+        reports[name] = {"id": doc["_id"], "score": _category_score(name, getattr(result, name))}
+    run_doc["reports"] = reports
+    return run_doc, category_docs
 
 
 def audit_summary(result: AuditResult, audit_id) -> AuditSummary:
-    """Denormalised summary written back onto the prospect after an audit."""
+    """Denormalised summary written back onto the lead after an audit."""
     ws = result.weighted_score
     lv = result.lead_viability
     day = result.created_at.date().isoformat()
@@ -94,10 +194,10 @@ def audit_summary(result: AuditResult, audit_id) -> AuditSummary:
     )
 
 
-def prospect_filter(domain: str, prospect_id=None) -> dict:
-    """Match the prospect to update: by ``_id`` when known (8b), else by domain."""
-    if prospect_id is not None:
-        return {"_id": prospect_id}
+def lead_filter(domain: str, lead_id=None) -> dict:
+    """Match the lead to update: by ``_id`` when known (8b), else by domain."""
+    if lead_id is not None:
+        return {"_id": lead_id}
     return {"domain": domain}
 
 
@@ -143,51 +243,74 @@ class MongoSnapshotStore:
 
 
 # --------------------------------------------------------------------------- #
-# Full audit report persistence
+# Audit run persistence
 # --------------------------------------------------------------------------- #
-async def save_audit_result(audits, prospects, result: AuditResult, *, prospect_id=None):
-    """Append the full audit to ``audits`` and denormalise a summary onto the prospect.
+async def save_audit_result(db, result: AuditResult, *, lead_id=None):
+    """Persist one audit: category docs first, then the run, then the lead summary.
 
-    Returns the inserted audit's ``_id``. The prospect update is matched by
-    ``_id`` when ``prospect_id`` is given (task 8b), otherwise by ``domain``; a
-    non-matching update is a silent no-op (8b guarantees the prospect exists).
+    Returns the inserted run's ``_id``. The category-docs-before-run order is
+    deliberate (module docstring): orphan category docs are harmless, dangling
+    ``reports`` references would not be. The lead update is matched by ``_id``
+    when ``lead_id`` is given (task 8b), otherwise by ``domain``; a
+    non-matching update logs a warning instead of failing (8b guarantees the
+    lead exists in practice).
     """
-    insert = await audits.insert_one(audit_document(result, prospect_id=prospect_id))
+    run_doc, category_docs = audit_run_documents(result, lead_id=lead_id)
+    for name, doc in category_docs.items():
+        await db[CATEGORY_COLLECTIONS[name]].insert_one(doc)
+    insert = await db[AUDIT_RUNS_COLLECTION].insert_one(run_doc)
+
     summary = audit_summary(result, insert.inserted_id)
-    update = await prospects.update_one(
-        prospect_filter(result.domain, prospect_id),
+    update = await db[leads_collection_name()].update_one(
+        lead_filter(result.domain, lead_id),
         {"$set": summary.model_dump(mode="python")},
     )
     if update.matched_count == 0:
         logger.warning(
-            "save_audit_result: no prospect matched for domain=%s prospect_id=%s; "
-            "audit %s was saved but its summary was not denormalised onto any prospect",
+            "save_audit_result: no lead matched for domain=%s lead_id=%s; "
+            "audit run %s was saved but its summary was not denormalised onto any lead",
             result.domain,
-            prospect_id,
+            lead_id,
             insert.inserted_id,
         )
     return insert.inserted_id
 
 
 # --------------------------------------------------------------------------- #
-# Index creation — called at startup by task 8b, not wired here
+# Index creation — run by main.py's lifespan before the app takes traffic (8b)
 # --------------------------------------------------------------------------- #
-async def ensure_indexes(db, *, prospects_name: str | None = None) -> None:
+async def ensure_indexes(db, *, leads_name: str | None = None) -> None:
     """Create the minimum indexes the persistence layer relies on.
 
-    Not called anywhere yet (task 8b runs it at app startup).
+    No ``lead_id`` index on ``audit_runs`` for now: nothing lists runs by lead
+    (the denormalised ``leads.last_audit_id`` covers the one lookup that
+    exists); add it when a "runs of this lead" query appears.
     """
-    prospects_name = prospects_name or os.getenv("MONGODB_COLLECTION", "prospects")
-    await db[AUDITS_COLLECTION].create_index([("domain", 1), ("created_at", -1)])
+    leads_name = leads_name or leads_collection_name()
+    await db[AUDIT_RUNS_COLLECTION].create_index([("domain", 1), ("created_at", -1)])
+    # Category reports: domain history (the compound's prefix also covers plain
+    # domain lookups) + assembling one run's reports. No unique on audit_id:
+    # one-doc-per-category is guaranteed by construction (audit_run_documents),
+    # and a unique index would only add a write-failure mode.
+    for collection_name in CATEGORY_COLLECTIONS.values():
+        await db[collection_name].create_index([("domain", 1), ("computed_at", -1)])
+        await db[collection_name].create_index("audit_id")
     await db[SNAPSHOTS_COLLECTION].create_index("domain", unique=True)
     # TTL: housekeeping only (sweeper is ~60s-granular; the $gte query is the
     # source of truth for freshness).
     await db[SNAPSHOTS_COLLECTION].create_index(
         "snapshot_at", expireAfterSeconds=int(SNAPSHOT_MAX_AGE.total_seconds())
     )
-    # Partial index over `$type: date` keeps only prospects with a real pending
+    # Partial index over `$type: date` keeps only leads with a real pending
     # retry (excludes the null retry_at of reachable ones), so a future retry job
-    # can query "who is due" without scanning every prospect (proposal §5).
-    await db[prospects_name].create_index(
+    # can query "who is due" without scanning every lead (proposal §5).
+    await db[leads_name].create_index(
         "retry_at", partialFilterExpression={"retry_at": {"$type": "date"}}
+    )
+    # At most one lead per domain may be in "audit" (in progress) at a time.
+    # This is the real concurrency guard for POST /api/audit: the endpoint's
+    # find_one pre-check is only a fast path (check-then-insert races); losing
+    # the race surfaces as DuplicateKeyError on the insert -> 409.
+    await db[leads_name].create_index(
+        "domain", unique=True, partialFilterExpression={"status": STATUS_IN_PROGRESS}
     )

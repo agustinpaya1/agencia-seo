@@ -1,5 +1,6 @@
-import SearchForm from "@/components/SearchForm";
-import Pipeline from "@/components/Pipeline";
+import { Suspense } from "react";
+import { SearchForm } from "@/features/audit";
+import { Pipeline } from "@/features/leads";
 
 export default function Home() {
   return (
@@ -7,9 +8,10 @@ export default function Home() {
       <SearchForm />
 
       <div className="w-full max-w-6xl mt-20 border-t border-white/10 pt-16">
-        <Pipeline />
+        <Suspense fallback={<div className="text-center text-slate-400 py-10 animate-pulse">Cargando prospectos...</div>}>
+          <Pipeline />
+        </Suspense>
       </div>
     </div>
   );
 }
-

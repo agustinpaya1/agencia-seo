@@ -236,7 +236,7 @@ class KeywordsResult(BaseModel):
 class CitabilityResult(BaseModel):
     """AI-citability result (citability.py).
 
-    Thin wrapper over scripts/citability_scorer.py; the existing formula is not
+    Thin wrapper over citability_scorer.py; the existing formula is not
     rewritten. Feeds the 5th category of the final weighted score.
     """
 
@@ -250,6 +250,20 @@ class CitabilityResult(BaseModel):
 # --------------------------------------------------------------------------- #
 # orchestrator.py — gates + aggregated result (diagram 3.1)
 # --------------------------------------------------------------------------- #
+class ScoreTier(str, Enum):
+    """Gate 2 final-score band, 5 tramos (replaces the free-form tier string).
+
+    Boundaries are inclusive on the lower end: EXCELLENT 90-100, GOOD 75-89,
+    FAIR 60-74, POOR 40-59, CRITICAL 0-39.
+    """
+
+    EXCELLENT = "excellent"  # 90-100
+    GOOD = "good"  # 75-89
+    FAIR = "fair"  # 60-74
+    POOR = "poor"  # 40-59
+    CRITICAL = "critical"  # 0-39
+
+
 class LeadViabilityResult(BaseModel):
     """Gate 1: is there enough margin to make this a lead? (diagram 3.1)."""
 
@@ -259,10 +273,16 @@ class LeadViabilityResult(BaseModel):
 
 
 class WeightedScoreResult(BaseModel):
-    """Gate 2: final weighted score across the 5 categories (diagram 3.1)."""
+    """Gate 2: final weighted score across the 5 categories (diagram 3.1).
 
-    final_score: float  # 0-100
-    tier: str  # good | moderate | poor | critical
+    ``breakdown`` carries every category, including the ones excluded from the
+    weighting (a failed submodule, or performance measured but with no data):
+    those appear with ``weight=0``/``points=0`` and a finding explaining the
+    exclusion, so a redistributed weight is visible instead of vanishing.
+    """
+
+    final_score: float  # 0-100, weighted over the available categories
+    tier: ScoreTier
     breakdown: list[WeightedDimension] = Field(default_factory=list)
 
 
@@ -281,5 +301,10 @@ class AuditResult(BaseModel):
     keywords: KeywordsResult | None = None
     citability: CitabilityResult | None = None
     lead_viability: LeadViabilityResult | None = None
-    weighted_score: WeightedScoreResult | None = None  # only when it is a lead
+    # Gate 2 is computed whenever at least one category is available, regardless
+    # of is_lead (task 8, punto 6); None only when every category is missing.
+    weighted_score: WeightedScoreResult | None = None
+    # Per-submodule failures / skips: a failed submodule leaves its field None and
+    # appends a line here; the rest of the audit still runs (task 8, punto 5).
+    errors: list[str] = Field(default_factory=list)
     created_at: datetime

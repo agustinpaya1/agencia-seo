@@ -10,6 +10,7 @@ from pymongo.server_api import ServerApi
 load_dotenv()
 
 from .api.router import api_router  # noqa: E402
+from .services.persistence import ensure_indexes  # noqa: E402
 
 
 @asynccontextmanager
@@ -18,6 +19,9 @@ async def lifespan(app: FastAPI):
     client = AsyncMongoClient(uri, server_api=ServerApi("1", strict=True, deprecation_errors=True))
     app.state.mongo_client = client
     app.state.db = client[os.getenv("MONGODB_DB", "agencia_seo_dev")]
+    # Indexes exist before the app takes traffic: unique snapshot per domain,
+    # audits history, and the retry_at partial index for a future retry job.
+    await ensure_indexes(app.state.db)
     try:
         yield
     finally:

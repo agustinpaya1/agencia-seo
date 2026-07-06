@@ -64,3 +64,6 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# Claude Code local state (permissions, session/agent scratch data — never commit)
+.claude/

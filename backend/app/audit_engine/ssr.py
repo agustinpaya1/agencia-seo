@@ -9,9 +9,9 @@ criteria in the same report would be a real credibility problem for the engine.
 Two distinct signals live here, on purpose:
 
 * :func:`main_content_server_rendered` — is the *page body* present in the raw
-  HTML? This REUSES ``scripts/fetch_page.py:assess_ssr_content`` (the tuned Issue
+  HTML? This REUSES ``fetch_page.py:assess_ssr_content`` (the tuned Issue
   #19 heuristic), it does not re-implement it. The audit engine already wraps
-  scripts/fetch_page.py for fetching, so importing its heuristic keeps one code
+  fetch_page.py for fetching, so importing its heuristic keeps one code
   path for both the ad-hoc CLI and the engine.
 * :func:`structured_data_server_rendered` — is JSON-LD present in the raw HTML?
   This mirrors, byte-for-byte, the criterion schema_org.py uses
@@ -25,20 +25,9 @@ Everything here is pure and synchronous: parsing HTML, no network, no LLM.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 from bs4 import BeautifulSoup
 
-# scripts/ is a standalone tools dir (no package), reused by the engine exactly as
-# audit_engine.fetch is documented to wrap scripts/fetch_page.py. Put it on the
-# path so ``assess_ssr_content`` is importable at runtime (pytest also adds it via
-# the ``pythonpath`` setting, but production has no pytest).
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
-from fetch_page import assess_ssr_content  # noqa: E402  (needs the path shim above)
+from .fetch_page import assess_ssr_content
 
 
 def main_content_server_rendered(html: str) -> tuple[bool, int, list[str]]:

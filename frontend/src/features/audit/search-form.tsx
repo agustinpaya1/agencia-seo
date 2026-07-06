@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { startAuditAction } from "@/app/actions";
+import { startAuditAction } from "@/features/audit/actions";
 import { Loader2 } from "lucide-react";
 
 export default function SearchForm() {

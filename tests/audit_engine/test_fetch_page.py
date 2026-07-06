@@ -6,14 +6,9 @@ framework-style root divs (id="app", id="root") but serving full HTML via
 SSR/prerendering were incorrectly flagged as client-side-only.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-# Ensure scripts/ is importable from the worktree
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
-
-from fetch_page import fetch_page  # noqa: E402
+from backend.app.audit_engine.fetch_page import fetch_page
 
 
 def _make_response(html: str, status_code: int = 200):
@@ -29,7 +24,7 @@ def _make_response(html: str, status_code: int = 200):
 
 def _fetch_with_html(html: str) -> dict:
     """Call fetch_page with a mocked HTTP response returning the given HTML."""
-    with patch("fetch_page.requests.get", return_value=_make_response(html)):
+    with patch("backend.app.audit_engine.fetch_page.requests.get", return_value=_make_response(html)):
         return fetch_page("http://example.com/")
 
 

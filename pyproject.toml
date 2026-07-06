@@ -30,10 +30,12 @@ entrypoint = "backend.app.main:app"
 
 [tool.pytest.ini_options]
 # tests/ mirrors the backend/app/ package tree; `.` makes `backend.app...`
-# importable and `scripts` makes the standalone tools (fetch_page.py) importable
-# without per-file sys.path hacks.
+# importable. importlib mode lets two mirrored test files share a basename
+# (tests/services/test_audit.py vs tests/api/endpoints/test_audit.py) without
+# sprinkling __init__.py through tests/.
 testpaths = ["tests"]
-pythonpath = [".", "scripts"]
+pythonpath = ["."]
+addopts = "--import-mode=importlib"
 
 [tool.ruff]
 line-length = 100

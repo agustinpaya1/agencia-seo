@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from ..dependencies import get_shared_dependency
-from .endpoints import audit, prospects
+from .endpoints import audit, leads
 
 api_router = APIRouter()
 
@@ -10,8 +10,8 @@ api_router.include_router(
 )
 
 api_router.include_router(
-    prospects.router,
-    prefix="/prospects",
-    tags=["Prospects"],
+    leads.router,
+    prefix="/leads",
+    tags=["Leads"],
     dependencies=[Depends(get_shared_dependency)],
 )

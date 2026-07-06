@@ -125,7 +125,7 @@ _KNOWN_TYPES = (
     }
 )
 
-# Browser-ish UA for the sameAs HEAD probes (mirrors scripts/fetch_page.py).
+# Browser-ish UA for the sameAs HEAD probes (mirrors fetch_page.py).
 _HEAD_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

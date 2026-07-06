@@ -5,16 +5,29 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pymongo import ReturnDocument
 
-from ...dependencies import get_prospects_collection
-from ...models.prospects import NoteRequest, StatusRequest
+from ...dependencies import get_leads_collection
+from ...models.leads import LeadNoteRequest, LeadStatusRequest
 from ...services.core import crm_stats, find_pdf
 
 router = APIRouter()
 
 
-@router.get("")
-async def get_prospects(
-    status: str = "", sort: str = "score", collection=Depends(get_prospects_collection)
+@router.get(
+    "",
+    operation_id="list_leads",
+    summary="Lista los leads del CRM (tope 100, sin paginación)",
+    description=(
+        'Devuelve `{"leads": [...], "stats": {...}}`. `status` filtra por igualdad '
+        "exacta contra el campo homónimo del documento; `sort` acepta `score` "
+        "(geo_score ascendente), `company` (alfabético) o `mrr` (monthly_value "
+        "descendente) — cualquier otro valor devuelve el orden natural de Mongo. "
+        "`stats` son agregados CRM (total, active, mrr, pipeline, avg_score, "
+        "avg_tier) calculados sobre los documentos devueltos. Estructura "
+        "provisional: corta en 100 documentos y no hay paginación todavía."
+    ),
+)
+async def list_leads(
+    status: str = "", sort: str = "score", collection=Depends(get_leads_collection)
 ):
     query = {}
     if status:
@@ -31,36 +44,57 @@ async def get_prospects(
 
     docs = await cursor.to_list(length=100)
 
-    prospects = []
+    leads = []
     for doc in docs:
         doc["id"] = str(doc.pop("_id"))
-        prospects.append(doc)
+        leads.append(doc)
 
-    stats = crm_stats(prospects)
+    stats = crm_stats(leads)
 
-    return {"prospects": prospects, "stats": stats}
+    return {"leads": leads, "stats": stats}
 
 
-@router.get("/{pid}")
-async def get_prospect_detail(pid: str, collection=Depends(get_prospects_collection)):
+@router.get(
+    "/{lead_id}",
+    operation_id="get_lead_detail",
+    summary="Detalle de un lead",
+    description=(
+        "Devuelve el documento crudo del lead (con `_id` expuesto como `id`) más "
+        "`has_pdf`: si existe una propuesta PDF pre-generada en el filesystem "
+        "(`~/.geo-prospects/proposals/{domain}*.pdf`). 400 si el id no es un "
+        "ObjectId válido, 404 si no existe."
+    ),
+)
+async def get_lead_detail(lead_id: str, collection=Depends(get_leads_collection)):
     try:
-        obj_id = ObjectId(pid)
+        obj_id = ObjectId(lead_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
-    p = await collection.find_one({"_id": obj_id})
-    if not p:
-        raise HTTPException(status_code=404, detail="Prospect not found")
+    lead = await collection.find_one({"_id": obj_id})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
 
-    p["id"] = str(p.pop("_id"))
-    p["has_pdf"] = find_pdf(p) is not None
-    return p
+    lead["id"] = str(lead.pop("_id"))
+    lead["has_pdf"] = find_pdf(lead) is not None
+    return lead
 
 
-@router.post("/{pid}/note")
-async def add_note(pid: str, data: NoteRequest, collection=Depends(get_prospects_collection)):
+@router.post(
+    "/{lead_id}/note",
+    operation_id="add_lead_note",
+    summary="Añade una nota CRM al lead",
+    description=(
+        "Hace `$push` de `{date, text}` (fecha generada en el servidor) al array "
+        "`notes` del lead y actualiza `updated_at`. Devuelve el documento "
+        "actualizado. 400 si el texto viene vacío, 404 si el lead no existe."
+    ),
+)
+async def add_lead_note(
+    lead_id: str, data: LeadNoteRequest, collection=Depends(get_leads_collection)
+):
     try:
-        obj_id = ObjectId(pid)
+        obj_id = ObjectId(lead_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
@@ -79,18 +113,30 @@ async def add_note(pid: str, data: NoteRequest, collection=Depends(get_prospects
             return_document=ReturnDocument.AFTER,
         )
         if not result:
-            raise HTTPException(status_code=404, detail="Prospect not found")
+            raise HTTPException(status_code=404, detail="Lead not found")
         result["id"] = str(result.pop("_id"))
         return result
     raise HTTPException(status_code=400, detail="Note text is required")
 
 
-@router.put("/{pid}/status")
-async def update_status(
-    pid: str, data: StatusRequest, collection=Depends(get_prospects_collection)
+@router.put(
+    "/{lead_id}/status",
+    operation_id="update_lead_status",
+    summary="Cambia la etapa del lead en el pipeline",
+    description=(
+        "Acepta exactamente uno de: `lead`, `audit`, `proposal`, `active`, "
+        "`churned`, `lost`, `completed` (aquí `lead` es la etapa CRM inicial, no "
+        "la entidad ni el flag `is_lead` del motor). Actualiza `status` y "
+        "`updated_at` y devuelve el documento actualizado. 400 fuera de la "
+        "whitelist, 404 si el lead no existe. También sirve para desbloquear a "
+        "mano un lead atascado en `audit` tras un crash del proceso."
+    ),
+)
+async def update_lead_status(
+    lead_id: str, data: LeadStatusRequest, collection=Depends(get_leads_collection)
 ):
     try:
-        obj_id = ObjectId(pid)
+        obj_id = ObjectId(lead_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
@@ -104,25 +150,35 @@ async def update_status(
             return_document=ReturnDocument.AFTER,
         )
         if not result:
-            raise HTTPException(status_code=404, detail="Prospect not found")
+            raise HTTPException(status_code=404, detail="Lead not found")
         result["id"] = str(result.pop("_id"))
         return result
     raise HTTPException(status_code=400, detail="Invalid status")
 
 
-@router.get("/{pid}/pdf")
-async def download_pdf(pid: str, collection=Depends(get_prospects_collection)):
+@router.get(
+    "/{lead_id}/pdf",
+    operation_id="download_lead_pdf",
+    summary="Descarga la propuesta PDF del lead",
+    description=(
+        "Sirve un PDF pre-generado desde el filesystem "
+        "(`~/.geo-prospects/proposals/{domain}*.pdf`, el más reciente por nombre); "
+        "este endpoint NO genera el PDF. 404 si el lead no existe o si no hay "
+        "ningún PDF para su dominio."
+    ),
+)
+async def download_lead_pdf(lead_id: str, collection=Depends(get_leads_collection)):
     try:
-        obj_id = ObjectId(pid)
+        obj_id = ObjectId(lead_id)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid ID format")
 
-    p = await collection.find_one({"_id": obj_id})
-    if not p:
-        raise HTTPException(status_code=404, detail="Prospect not found")
+    lead = await collection.find_one({"_id": obj_id})
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
 
-    p["id"] = str(p.pop("_id"))
-    pdf_path = find_pdf(p)
+    lead["id"] = str(lead.pop("_id"))
+    pdf_path = find_pdf(lead)
     if not pdf_path:
         raise HTTPException(status_code=404, detail="PDF not found")
 

@@ -22,7 +22,7 @@ Two layers, kept apart on purpose, same shape as the other submodules:
 Reuse vs. own logic (declared here since it is a judgment call, not spelled
 out anywhere else):
 
-* The main-page request is NOT done via ``scripts/fetch_page.py:fetch_page``.
+* The main-page request is NOT done via ``fetch_page.py:fetch_page``.
   That function already follows redirects, captures headers and handles
   timeouts/connection errors — but it never keeps the raw HTML, only a
   stripped ``text_content`` after decomposing scripts/nav/footer. Every other
@@ -30,10 +30,10 @@ out anywhere else):
   the untouched HTML, so the main-page fetch is a small dedicated
   ``requests.get`` here. It reuses ``fetch_page.DEFAULT_HEADERS`` so the
   User-Agent/Accept headers stay identical to the rest of the codebase.
-* robots.txt IS reused as-is via ``scripts/fetch_page.py:fetch_robots_txt``:
+* robots.txt IS reused as-is via ``fetch_page.py:fetch_robots_txt``:
   it already resolves "exists vs. 404 vs. request error" into one boolean,
   which is exactly what this module needs (see the 404 decision below).
-* The sitemap is NOT reused via ``scripts/fetch_page.py:crawl_sitemap``: that
+* The sitemap is NOT reused via ``fetch_page.py:crawl_sitemap``: that
   function recurses into every sub-sitemap of a sitemap index with no depth
   limit and returns the fully-crawled page list, which is more crawling than
   step B needs (see the depth decision below).
@@ -92,25 +92,16 @@ Declared decisions (judgment calls the prompt asked to make explicit):
 from __future__ import annotations
 
 import asyncio
-import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
+from .fetch_page import DEFAULT_HEADERS, fetch_robots_txt
 from .models import FetchResult, Reachability
-
-# scripts/ is a standalone tools dir (no package); same path shim as ssr.py and
-# citability.py so its constants/functions are importable at runtime.
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
-from fetch_page import DEFAULT_HEADERS, fetch_robots_txt  # noqa: E402
 
 PAGE_TIMEOUT_S = 15
 ROBOTS_TIMEOUT_S = 10

@@ -1,9 +1,17 @@
 "use server";
 
-import { revalidateTag } from "next/cache";
+import { updateTag } from "next/cache";
 
-export async function startAuditAction(prevState: any, formData: FormData) {
-  const url = formData.get("url") as string;
+export async function startAuditAction(prevStateOrUrl: any, formData?: FormData) {
+  let url = "";
+
+  if (formData instanceof FormData) {
+    url = formData.get("url") as string;
+  } else if (typeof prevStateOrUrl === "string") {
+    url = prevStateOrUrl;
+  } else if (prevStateOrUrl instanceof FormData) {
+    url = prevStateOrUrl.get("url") as string;
+  }
 
   if (!url || url.trim() === "") {
     return { error: "La URL es obligatoria" };
@@ -19,7 +27,7 @@ export async function startAuditAction(prevState: any, formData: FormData) {
     });
 
     if (response.ok) {
-      revalidateTag("prospects");
+      updateTag("leads");
       return { success: true, message: "Auditoría iniciada correctamente" };
     } else {
       return { error: "Falló la conexión con el motor de auditoría" };

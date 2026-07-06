@@ -1,22 +1,14 @@
 """AI-citability wrapper.
 
-Thin adapter over scripts/citability_scorer.py: it reuses the existing 5-weight
+Thin adapter over citability_scorer.py: it reuses the existing 5-weight
 formula without rewriting it, and maps the output onto :class:`CitabilityResult`.
 This is the 5th category of the final weighted score.
 """
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
+from .citability_scorer import analyze_html_citability
 from .models import CitabilityResult, FetchResult
-
-_SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
-if str(_SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS_DIR))
-
-from citability_scorer import analyze_html_citability  # noqa: E402
 
 
 def score_citability(fetch: FetchResult) -> CitabilityResult:
