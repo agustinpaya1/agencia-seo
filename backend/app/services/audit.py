@@ -17,18 +17,23 @@ Lead ``status`` after an audit (the endpoint inserts the lead as
   unexpectedly; made visible instead of leaving the lead "in progress"
   forever.
 
+While the audit runs, every :class:`AuditStage` the orchestrator reports is
+written onto the lead as ``current_stage`` (plus PERSISTENCE, reported here
+before saving) so the UI can render a live pipeline timeline. Progress writes
+are best-effort: a failing write is logged, never fatal to the audit.
+
 KNOWN DEBT (task 8b closing): this runs in-process via FastAPI BackgroundTasks.
 If the process restarts mid-audit (Lighthouse can take minutes), that audit is
 lost and its lead stays in ``audit`` until relaunched manually — there is no
 queue or automatic retry beyond the UNREACHABLE ``retry_at``. Acceptable at the
-current prospecting volume; an external queue (Celery/RQ) is a deliberate later
-step, not something to slip in silently.
+current volume of new leads; an external queue (Celery/RQ) is a deliberate
+later step, not something to slip in silently.
 """
 
 import logging
 from datetime import datetime
 
-from ..audit_engine.models import Reachability
+from ..audit_engine.models import AuditStage, Reachability
 from ..audit_engine.orchestrator import run_audit
 from ..models.leads import STATUS_COMPLETED, STATUS_FAILED, STATUS_UNREACHABLE
 from .persistence import (
@@ -47,6 +52,7 @@ async def run_audit_background(
     db,
     *,
     audit_runner=None,
+    api_key: str | None = None,
 ) -> None:
     """Run the real audit for ``domain`` and leave the lead in a final status.
 
@@ -59,10 +65,28 @@ async def run_audit_background(
     """
     audit_runner = audit_runner or run_audit
     leads = db[leads_collection_name()]
+
+    async def on_stage(stage: AuditStage) -> None:
+        # Best-effort progress marker for the UI timeline. Guarded here (in
+        # addition to the orchestrator's own guard) so the direct PERSISTENCE
+        # call below can never fail an otherwise healthy audit either.
+        try:
+            await leads.update_one({"_id": lead_id}, {"$set": {"current_stage": stage.value}})
+        except Exception:
+            logger.exception(
+                "run_audit_background: no se pudo escribir current_stage=%s para lead=%s",
+                stage.value,
+                lead_id,
+            )
+
     try:
         result = await audit_runner(
-            domain, snapshot_store=MongoSnapshotStore(db[SNAPSHOTS_COLLECTION])
+            domain,
+            snapshot_store=MongoSnapshotStore(db[SNAPSHOTS_COLLECTION]),
+            on_stage=on_stage,
+            api_key=api_key,
         )
+        await on_stage(AuditStage.PERSISTENCE)
         await save_audit_result(db, result, lead_id=lead_id)
         status = STATUS_COMPLETED if result.reachability == Reachability.OK else STATUS_UNREACHABLE
         await leads.update_one({"_id": lead_id}, {"$set": {"status": status}})

@@ -269,7 +269,7 @@ class TestSnapshotHelpers:
 class TestFetchMetadata:
     def test_persists_only_the_closed_metadata_list(self):
         meta = fetch_metadata(make_fetch())
-        assert set(meta) == {"status_code", "final_url", "sitemap_urls", "notes", "fetched_at"}
+        assert set(meta) == {"status_code", "final_url", "sitemap_urls", "notes", "fetched_at", "lighthouse_raw"}
         assert meta["status_code"] == 200
         assert meta["sitemap_urls"] == ["https://example.com/sitemap.xml"]
 

@@ -31,6 +31,7 @@ from .fetch import fetch_site as _fetch_site
 from .keywords import suggest_keywords as _suggest_keywords
 from .models import (
     AuditResult,
+    AuditStage,
     CitabilityResult,
     FetchResult,
     KeywordsResult,
@@ -46,7 +47,7 @@ from .models import (
     WeightedDimension,
     WeightedScoreResult,
 )
-from .performance import SnapshotStore
+from .performance import SnapshotStore, process_lighthouse_payload
 from .performance import measure_performance as _measure_performance
 from .schema_org import validate_schema as _validate_schema
 from .security import scan_security as _scan_security
@@ -55,6 +56,11 @@ from .technical import score_technical as _score_technical
 
 # Site did not respond -> mark not accessible and retry later, do not block.
 RETRY_AFTER = timedelta(hours=24)
+
+# Progress callback: awaited with the stage that is *starting*. The engine only
+# reports; whoever injects it decides what to do (services/audit.py persists it
+# onto the lead as `current_stage`).
+StageReporter = Callable[[AuditStage], Awaitable[None]]
 
 # Gate 1: every required dimension must reach this to count as "already solved".
 LEAD_THRESHOLD = 90.0
@@ -337,6 +343,8 @@ async def run_audit(
     suggest_keywords: Callable[[FetchResult, SchemaResult], KeywordsResult] | None = None,
     score_citability: Callable[[FetchResult], CitabilityResult] | None = None,
     snapshot_store: SnapshotStore | None = None,
+    on_stage: StageReporter | None = None,
+    api_key: str | None = None,
 ) -> AuditResult:
     """Run the full deterministic audit for ``domain`` (diagram 3.1).
 
@@ -364,8 +372,13 @@ async def run_audit(
     so the cache is real across audits instead of a fresh in-memory no-op per
     call. It only applies to the default path: an injected ``measure_performance``
     manages its own store.
+
+    ``on_stage`` is awaited with each :class:`AuditStage` as it *starts*
+    (FETCH .. GATE_2; PERSISTENCE belongs to the caller). A failing reporter
+    must never abort the audit: the exception becomes an ``errors`` line and
+    the pipeline continues.
     """
-    fetch_site = fetch_site or _fetch_site
+    fetch_site = fetch_site or partial(_fetch_site, lighthouse_api_key=api_key)
     detect_tech_stack = detect_tech_stack or _detect_tech_stack
     score_technical = score_technical or _score_technical
     scan_security = scan_security or _scan_security
@@ -379,7 +392,17 @@ async def run_audit(
     created_at = datetime.now(timezone.utc)
     errors: list[str] = []
 
+    async def report(stage: AuditStage) -> None:
+        # Progress is best-effort: a broken reporter is recorded, never fatal.
+        if on_stage is None:
+            return
+        try:
+            await on_stage(stage)
+        except Exception as exc:
+            errors.append(f"on_stage({stage.value}): fallo inesperado ({exc!r}).")
+
     # 1. Initial fetch — the one mandatory sequential step; everything reads it.
+    await report(AuditStage.FETCH)
     try:
         fetch = await fetch_site(domain)
     except Exception as exc:  # fetch_site is built not to raise; guard a real bug anyway
@@ -403,7 +426,15 @@ async def run_audit(
             created_at=created_at,
         )
 
+    performance_runtime = None
+    seo_runtime = None
+    if fetch.lighthouse_raw:
+        extracted = process_lighthouse_payload(fetch.lighthouse_raw)
+        performance_runtime = extracted.get("performance_runtime")
+        seo_runtime = extracted.get("seo_runtime")
+
     # 2. Tech stack — sequential, fully finished before performance starts.
+    await report(AuditStage.TECH_STACK)
     tech_stack: TechStackResult | None = None
     try:
         tech_stack = await detect_tech_stack(fetch)
@@ -412,6 +443,11 @@ async def run_audit(
             f"detect_tech_stack: fallo inesperado ({exc!r}); technical y security no se "
             "ejecutan (dependen de tech_stack)."
         )
+
+    # 3-6. One reported stage for the whole technical block: the inline
+    # technical score plus the parallel gather below. It stays "current" until
+    # CONTENT_ANALYSIS is reported, i.e. until all four submodules finished.
+    await report(AuditStage.TECHNICAL_ANALYSIS)
 
     # 3. Technical score — pure/sync, inline. Cascade: skipped if tech_stack failed.
     technical: TechnicalResult | None = None
@@ -452,6 +488,9 @@ async def run_audit(
         _unwrap(by_name["security"], "scan_security", errors) if "security" in by_name else None
     )
 
+    # 7-8. Keywords + citability, one reported stage.
+    await report(AuditStage.CONTENT_ANALYSIS)
+
     # 7. Keywords — pure/sync, after the gather. Cascade: skipped if schema failed.
     keywords: KeywordsResult | None = None
     if schema_org is not None:
@@ -470,10 +509,12 @@ async def run_audit(
         errors.append(f"score_citability: fallo inesperado ({exc!r}).")
 
     # Gate 1 — lead viability (all 4 required dimensions must be present & measurable).
+    await report(AuditStage.GATE_1)
     lead_viability = _gate_one(technical, security, performance, schema_org)
 
     # Gate 2 — weighted score, computed regardless of is_lead (punto 6). None only
     # when every category is missing.
+    await report(AuditStage.GATE_2)
     weighted_score = evaluate_weighted_score(
         technical, security, performance, schema_org, citability
     )
@@ -493,6 +534,8 @@ async def run_audit(
         weighted_score=weighted_score,
         errors=errors,
         created_at=created_at,
+        performance_runtime=performance_runtime,
+        seo_runtime=seo_runtime,
     )
 
 

@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pymongo.errors import DuplicateKeyError
 
-from ...dependencies import get_db, get_leads_collection
+from ...dependencies import get_db, get_leads_collection, get_pagespeed_api_key
 from ...models.audit import AuditRequest
 from ...models.leads import STATUS_IN_PROGRESS
 from ...services.audit import run_audit_background
@@ -33,6 +33,7 @@ async def start_audit(
     background_tasks: BackgroundTasks,
     leads=Depends(get_leads_collection),
     db=Depends(get_db),
+    api_key: str | None = Depends(get_pagespeed_api_key),
 ):
     url = data.url.strip()
     if not url:
@@ -73,9 +74,14 @@ async def start_audit(
         # our find_one and this insert.
         raise HTTPException(status_code=409, detail=f"Ya hay una auditoría en curso para {domain}")
     inserted_id = result.inserted_id
-
     # Spawn background task
-    background_tasks.add_task(run_audit_background, inserted_id, domain, db)
+    background_tasks.add_task(
+        run_audit_background,
+        inserted_id,
+        domain,
+        db,
+        api_key=api_key,
+    )
 
     lead["id"] = str(inserted_id)
     lead.pop("_id", None)

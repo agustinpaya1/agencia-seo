@@ -103,7 +103,7 @@ def harness(monkeypatch):
 
     state = {"reachable": True}
 
-    async def fake_run_audit(domain, *, snapshot_store=None):
+    async def fake_run_audit(domain, *, snapshot_store=None, on_stage=None, api_key=None):
         return make_audit(domain, reachable=state["reachable"])
 
     monkeypatch.setattr(audit_service, "run_audit", fake_run_audit)

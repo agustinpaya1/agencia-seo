@@ -29,7 +29,7 @@ La fórmula actual (`Citability 25% + Brand 20% + EEAT 20% + Technical 15% + Sch
 ### 3.1 Pipeline general (sin IA en ningún punto)
 ```mermaid
 flowchart TD
-    A["URL del prospecto"] --> B["Fetch inicial: HTML + headers + robots.txt + sitemap"]
+    A["URL del cliente potencial"] --> B["Fetch inicial: HTML + headers + robots.txt + sitemap"]
     B --> C{"¿Responde el servidor?"}
     C -->|"No / timeout"| C1["Marcar no accesible, reintentar en 24h"]
     C -->|"Sí"| D["Detección de stack tecnológico"]

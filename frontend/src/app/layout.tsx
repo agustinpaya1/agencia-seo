@@ -3,7 +3,9 @@ import { Inter } from "next/font/google";
 import { Sidebar } from "@/features/ui";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
+// Exposed as a CSS variable so Tailwind's `font-sans` (see --font-sans in
+// globals.css) resolves to Inter, instead of pinning the class on <body>.
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
 
 export const metadata: Metadata = {
   title: "Agustín Payá - Agentic SEO Dashboard",
@@ -15,13 +17,18 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Light theme by default — no `dark` class. A future toggle would add it
+  // here (selector-based dark mode, see globals.css).
   return (
-    <html lang="es">
-      <body className={`${inter.className} min-h-screen flex antialiased`}>
+    <html lang="es" className={inter.variable}>
+      <body className="min-h-screen flex font-sans antialiased bg-background text-foreground">
         <Sidebar />
 
-        {/* Main Content */}
-        <main className="flex-1 p-8">
+        {/* Main content. min-w-0 is load-bearing: as a flex item, <main>
+            defaults to min-width:auto, so a wide child (the kanban columns)
+            would stretch it past the viewport and force a page-level
+            horizontal scroll instead of scrolling inside the board. */}
+        <main className="flex-1 min-w-0 p-8">
           {children}
         </main>
       </body>

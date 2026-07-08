@@ -1,0 +1,16 @@
+{
+  // Editor/typecheck support only — Vitest resolves imports via its own
+  // config (frontend/vitest.config.mts). Extends the app tsconfig so test
+  // files share its strictness and JSX settings; the extra `paths` entries
+  // re-point module resolution at frontend/, since this directory sits
+  // outside that package and has no node_modules of its own.
+  "extends": "../../frontend/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../../frontend/src/*"],
+      "*": ["../../frontend/node_modules/*"]
+    }
+  },
+  "include": ["**/*.ts", "**/*.tsx"]
+}

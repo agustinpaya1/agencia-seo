@@ -86,7 +86,7 @@ class TestEvaluateFetchPure:
         page = make_page()
 
         result = evaluate_fetch(
-            "example.com", page, "User-agent: *\nAllow: /", SITEMAP_URLSET, now=NOW
+            "example.com", page, "User-agent: *\nAllow: /", SITEMAP_URLSET, None, now=NOW
         )
 
         assert result.reachability == Reachability.OK
@@ -101,7 +101,7 @@ class TestEvaluateFetchPure:
     def test_missing_robots_txt_is_none_not_error(self):
         page = make_page()
 
-        result = evaluate_fetch("example.com", page, None, SITEMAP_URLSET, now=NOW)
+        result = evaluate_fetch("example.com", page, None, SITEMAP_URLSET, None, now=NOW)
 
         assert result.reachability == Reachability.OK
         assert result.robots_txt is None
@@ -111,7 +111,7 @@ class TestEvaluateFetchPure:
         # index's own <loc> values are sitemap files, never pages.
         page = make_page()
 
-        result = evaluate_fetch("example.com", page, None, SITEMAP_INDEX, now=NOW)
+        result = evaluate_fetch("example.com", page, None, SITEMAP_INDEX, None, now=NOW)
 
         assert result.sitemap_urls == []
         assert any("sitemapindex" in note for note in result.notes)
@@ -124,6 +124,7 @@ class TestEvaluateFetchPure:
             page,
             None,
             SITEMAP_INDEX,
+            None,
             sub_sitemap_xmls=[SITEMAP_POSTS, SITEMAP_PAGES],
             now=NOW,
         )
@@ -144,6 +145,7 @@ class TestEvaluateFetchPure:
             page,
             None,
             SITEMAP_INDEX,
+            None,
             sub_sitemap_xmls=[SITEMAP_POSTS, None],
             now=NOW,
         )
@@ -162,6 +164,7 @@ class TestEvaluateFetchPure:
             page,
             None,
             SITEMAP_INDEX,
+            None,
             sub_sitemap_xmls=[NESTED_SITEMAP_INDEX, SITEMAP_PAGES],
             now=NOW,
         )
@@ -180,6 +183,7 @@ class TestEvaluateFetchPure:
             page,
             None,
             SITEMAP_INDEX,
+            None,
             sub_sitemap_xmls=[SITEMAP_POSTS],
             now=NOW,
         )
@@ -193,7 +197,7 @@ class TestEvaluateFetchPure:
     def test_missing_sitemap_is_empty_list(self):
         page = make_page()
 
-        result = evaluate_fetch("example.com", page, None, None, now=NOW)
+        result = evaluate_fetch("example.com", page, None, None, None, now=NOW)
 
         assert result.sitemap_urls == []
         assert result.notes == []
@@ -205,7 +209,7 @@ class TestEvaluateFetchPure:
         )
         xml = f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{entries}</urlset>'
 
-        result = evaluate_fetch("example.com", page, None, xml, now=NOW)
+        result = evaluate_fetch("example.com", page, None, xml, None, now=NOW)
 
         assert len(result.sitemap_urls) == 5  # deduplicated: only p0..p4 are distinct
         assert result.notes == []
@@ -217,7 +221,7 @@ class TestEvaluateFetchPure:
         )
         xml = f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{entries}</urlset>'
 
-        result = evaluate_fetch("example.com", page, None, xml, now=NOW)
+        result = evaluate_fetch("example.com", page, None, xml, None, now=NOW)
 
         assert len(result.sitemap_urls) == MAX_SITEMAP_URLS
         assert any("MAX_SITEMAP_URLS" in note for note in result.notes)
@@ -225,7 +229,7 @@ class TestEvaluateFetchPure:
     def test_404_on_main_page_is_ok_with_status_code(self):
         page = make_page(status_code=404, html="<html>not found</html>")
 
-        result = evaluate_fetch("example.com", page, None, None, now=NOW)
+        result = evaluate_fetch("example.com", page, None, None, None, now=NOW)
 
         assert result.reachability == Reachability.OK
         assert result.status_code == 404
@@ -234,7 +238,7 @@ class TestEvaluateFetchPure:
     def test_5xx_on_main_page_is_unreachable(self):
         page = make_page(status_code=503, final_url="https://example.com/", html="<html></html>")
 
-        result = evaluate_fetch("example.com", page, "User-agent: *", SITEMAP_URLSET, now=NOW)
+        result = evaluate_fetch("example.com", page, "User-agent: *", SITEMAP_URLSET, None, now=NOW)
 
         assert result.reachability == Reachability.UNREACHABLE
         assert result.status_code == 503
@@ -246,7 +250,7 @@ class TestEvaluateFetchPure:
     def test_request_failure_is_unreachable(self):
         page = make_page(ok=False, status_code=None, final_url=None, html=None, error="timeout")
 
-        result = evaluate_fetch("example.com", page, None, None, now=NOW)
+        result = evaluate_fetch("example.com", page, None, None, None, now=NOW)
 
         assert result.reachability == Reachability.UNREACHABLE
         assert result.status_code is None

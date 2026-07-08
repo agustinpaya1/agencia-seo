@@ -1,19 +1,83 @@
 from datetime import datetime
+from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from ..audit_engine.models import Reachability
+from ..audit_engine.models import AuditStage, Reachability
 
-# Lead status vocabulary owned by the audit flow (task 8b). "audit" and
-# "completed" predate it (see valid_statuses in api/endpoints/leads.py and
-# the frontend Pipeline chips); "unreachable" and "failed" were added because no
-# existing status distinguishes "site down, retry pending" or "audit crashed"
-# from a finished audit. Lives here (not services/audit.py) so the persistence
-# layer can build the unique partial index over it without a circular import.
-STATUS_IN_PROGRESS = "audit"
-STATUS_COMPLETED = "completed"
-STATUS_UNREACHABLE = "unreachable"
-STATUS_FAILED = "failed"
+
+class LeadStatus(str, Enum):
+    """Full pipeline-status vocabulary for a lead document.
+
+    The first seven are the CRM funnel and are user-assignable (see
+    :data:`EDITABLE_STATUSES`); ``unreachable`` and ``failed`` are set only by
+    the audit engine — no existing status distinguished "site down, retry
+    pending" or "audit crashed" from a finished audit. Lives here (not
+    services/audit.py) so the persistence layer can build the unique partial
+    index over it without a circular import.
+    """
+
+    LEAD = "lead"
+    AUDIT = "audit"
+    PROPOSAL = "proposal"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CHURNED = "churned"
+    LOST = "lost"
+    UNREACHABLE = "unreachable"
+    FAILED = "failed"
+
+
+# Statuses owned by the audit flow (task 8b), kept as plain strings because
+# they are written raw into Mongo documents and compared against raw docs.
+STATUS_IN_PROGRESS = LeadStatus.AUDIT.value
+STATUS_COMPLETED = LeadStatus.COMPLETED.value
+STATUS_UNREACHABLE = LeadStatus.UNREACHABLE.value
+STATUS_FAILED = LeadStatus.FAILED.value
+
+# Statuses a user may assign by hand (PUT /api/leads/{id}/status and the kanban
+# drag & drop). unreachable/failed are engine verdicts, not manual moves.
+EDITABLE_STATUSES: frozenset[LeadStatus] = frozenset(
+    {
+        LeadStatus.LEAD,
+        LeadStatus.AUDIT,
+        LeadStatus.PROPOSAL,
+        LeadStatus.ACTIVE,
+        LeadStatus.COMPLETED,
+        LeadStatus.CHURNED,
+        LeadStatus.LOST,
+    }
+)
+
+
+def parse_editable_status(raw: str) -> LeadStatus | None:
+    """Pure validation of a user-supplied status change.
+
+    Returns the :class:`LeadStatus` when ``raw`` (stripped) is one of the
+    user-assignable stages, ``None`` otherwise — including the engine-owned
+    ``unreachable``/``failed``, which must never be set by hand.
+    """
+    try:
+        status = LeadStatus(raw.strip())
+    except ValueError:
+        return None
+    return status if status in EDITABLE_STATUSES else None
+
+
+def parse_logo_url(raw: str) -> str | None:
+    """Pure validation of a user-pasted logo URL.
+
+    An ``http(s)://`` URL is accepted as-is (stripped); an empty/blank value
+    normalises to ``""`` meaning "clear the logo, fall back to the initials
+    placeholder"; anything else is invalid (``None``). There is no upload
+    machinery behind this — it is a plain string the UI renders as <img src>.
+    """
+    value = raw.strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    return None
 
 
 class LeadNoteRequest(BaseModel):
@@ -22,6 +86,10 @@ class LeadNoteRequest(BaseModel):
 
 class LeadStatusRequest(BaseModel):
     status: str
+
+
+class LeadLogoRequest(BaseModel):
+    logo_url: str = ""
 
 
 class LeadNote(BaseModel):
@@ -90,3 +158,9 @@ class Lead(AuditSummary):
     monthly_value: float = 0.0
     notes: list[LeadNote] = Field(default_factory=list)
     manual_findings: list[ManualFinding] = Field(default_factory=list)
+    # Last stage the background audit reported (services/audit.py). Kept after
+    # the run finishes so a failed audit still shows where it stopped.
+    current_stage: AuditStage | None = None
+    # Optional pasted image URL for the media card; "" / None -> initials
+    # placeholder. Validated by parse_logo_url, no file upload behind it.
+    logo_url: str | None = None

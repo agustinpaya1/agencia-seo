@@ -107,6 +107,7 @@ PAGE_TIMEOUT_S = 15
 ROBOTS_TIMEOUT_S = 10
 SITEMAP_TIMEOUT_S = 10
 MAX_SITEMAP_URLS = 500
+LIGHTHOUSE_TIMEOUT_S = 45
 MAX_SUB_SITEMAPS = 20  # cap on how many child sitemaps a <sitemapindex> is followed into
 _UNREACHABLE_STATUS_FLOOR = 500  # 5xx -> UNREACHABLE; 4xx is a real, reachable response
 _SITEMAP_PATHS = ("/sitemap.xml", "/sitemap_index.xml")
@@ -142,6 +143,7 @@ def evaluate_fetch(
     page: PageFetchOutcome,
     robots_txt: str | None,
     sitemap_xml: str | None,
+    lighthouse_raw: dict | None,  # Nuevo parámetro
     *,
     sub_sitemap_xmls: Sequence[str | None] | None = None,
     now: datetime | None = None,
@@ -182,6 +184,7 @@ def evaluate_fetch(
         headers=page.headers,
         robots_txt=robots_txt,
         sitemap_urls=sitemap_urls,
+        lighthouse_raw=lighthouse_raw,
         fetched_at=now,
         notes=notes,
     )
@@ -288,29 +291,16 @@ async def fetch_site(
     fetch_robots_fn: Callable[[str, int], Awaitable[str | None]] | None = None,
     fetch_sitemap_fn: Callable[[str, int], Awaitable[str | None]] | None = None,
     fetch_sub_sitemap_fn: Callable[[str, int], Awaitable[str | None]] | None = None,
+    fetch_lighthouse_fn: Callable[[str, int, str | None], Awaitable[dict | None]] | None = None,
+    lighthouse_api_key: str | None = None,
     now: datetime | None = None,
 ) -> FetchResult:
-    """Fetch HTML + headers + robots.txt + sitemap for ``domain`` (diagram 3.1, step B).
 
-    Fetches the main page first; if it is UNREACHABLE (no response, or 5xx),
-    returns immediately without requesting robots.txt/sitemap. Otherwise
-    fetches both — independently of each other, each degrading to ``None`` on
-    its own failure. If the sitemap turns out to be a ``<sitemapindex>``, this
-    shell decides how many child sitemaps to follow (capped at
-    :data:`MAX_SUB_SITEMAPS`, in document order) and fetches each one via
-    ``fetch_sub_sitemap_fn``, skipping any that fails — never letting one bad
-    sub-sitemap fail the whole fetch. All raw XML text collected is then
-    handed to :func:`evaluate_fetch` for interpretation.
-
-    ``fetch_page_fn``/``fetch_robots_fn``/``fetch_sitemap_fn``/
-    ``fetch_sub_sitemap_fn`` are injectable so this shell is testable without
-    real network; they default to the real ``requests``-based
-    implementations.
-    """
     fetch_page_fn = fetch_page_fn or _fetch_main_page
     fetch_robots_fn = fetch_robots_fn or _fetch_robots_txt
     fetch_sitemap_fn = fetch_sitemap_fn or _fetch_sitemap_xml
     fetch_sub_sitemap_fn = fetch_sub_sitemap_fn or _fetch_single_sitemap_xml
+    fetch_lighthouse_fn = fetch_lighthouse_fn or _fetch_lighthouse_api
 
     target = _normalize_domain(domain)
     page = await fetch_page_fn(target, PAGE_TIMEOUT_S)
@@ -318,25 +308,41 @@ async def fetch_site(
     if not page.ok or (
         page.status_code is not None and page.status_code >= _UNREACHABLE_STATUS_FLOOR
     ):
-        return evaluate_fetch(domain, page, None, None, now=now)
+        return evaluate_fetch(domain, page, None, None, None, now=now)
 
     base = page.final_url or target
-    robots_txt = await fetch_robots_fn(base, ROBOTS_TIMEOUT_S)
-    sitemap_xml = await fetch_sitemap_fn(base, SITEMAP_TIMEOUT_S)
+
+    # EJECUCIÓN CONCURRENTE: Lanzamos los tres procesos lentos a la vez
+    robots_task = fetch_robots_fn(base, ROBOTS_TIMEOUT_S)
+    sitemap_task = fetch_sitemap_fn(base, SITEMAP_TIMEOUT_S)
+    lighthouse_task = fetch_lighthouse_fn(base, LIGHTHOUSE_TIMEOUT_S, lighthouse_api_key)
+
+    robots_txt, sitemap_xml, lighthouse_raw = await asyncio.gather(
+        robots_task, sitemap_task, lighthouse_task
+    )
 
     sub_sitemap_xmls: list[str | None] | None = None
     if sitemap_xml:
         kind, locs = _classify_sitemap_document(sitemap_xml)
         if kind == _SITEMAP_INDEX and locs:
-            sub_sitemap_xmls = []
-            for sub_url in locs[:MAX_SUB_SITEMAPS]:
-                try:
-                    sub_sitemap_xmls.append(await fetch_sub_sitemap_fn(sub_url, SITEMAP_TIMEOUT_S))
-                except Exception:
-                    sub_sitemap_xmls.append(None)
+            # Tu lógica recursiva de sitemaps se mantiene intacta
+            sub_tasks = [
+                fetch_sub_sitemap_fn(sub_url, SITEMAP_TIMEOUT_S)
+                for sub_url in locs[:MAX_SUB_SITEMAPS]
+            ]
+            sub_results = await asyncio.gather(*sub_tasks, return_exceptions=True)
+            sub_sitemap_xmls = [
+                res if not isinstance(res, Exception) else None for res in sub_results
+            ]
 
     return evaluate_fetch(
-        domain, page, robots_txt, sitemap_xml, sub_sitemap_xmls=sub_sitemap_xmls, now=now
+        domain,
+        page,
+        robots_txt,
+        sitemap_xml,
+        lighthouse_raw,  # Pasamos el JSON crudo a la capa pura
+        sub_sitemap_xmls=sub_sitemap_xmls,
+        now=now,
     )
 
 
@@ -403,3 +409,23 @@ def _sync_fetch_single_sitemap_xml(url: str, timeout: int) -> str | None:
     if response.status_code == 200 and response.text.strip():
         return response.text
     return None
+
+
+async def _fetch_lighthouse_api(url: str, timeout: int, api_key: str | None = None) -> dict | None:
+    return await asyncio.to_thread(_sync_fetch_lighthouse_api, url, timeout, api_key)
+
+
+def _sync_fetch_lighthouse_api(url: str, timeout: int, api_key: str | None) -> dict | None:
+    """Consume la API de PageSpeed filtrando por SEO y Performance."""
+    endpoint = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed"
+    params = {"url": url, "category": ["performance", "seo"], "strategy": "mobile"}
+    if api_key:
+        params["key"] = api_key
+
+    try:
+        response = requests.get(endpoint, params=params, timeout=timeout)
+        response.raise_for_status()
+        return response.json()
+    except Exception:
+        # En el diseño de fetch.py, los fallos de red periféricos degradan a None
+        return None

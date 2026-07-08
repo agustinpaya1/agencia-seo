@@ -8,6 +8,7 @@ diagram 3.1 of docs/motor-auditoria-determinista.md.
 
 from datetime import datetime
 from enum import Enum
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,28 @@ class Reachability(str, Enum):
 
     OK = "ok"
     UNREACHABLE = "unreachable"  # no response / timeout -> retry in 24h
+
+
+class AuditStage(str, Enum):
+    """Progress marker for a running audit, in pipeline order (diagram 3.1).
+
+    The orchestrator reports each stage through its ``on_stage`` callback as it
+    advances; the four parallel submodules (technical/security/performance/
+    schema_org) are deliberately ONE stage — the callback fires when the block
+    starts and the next stage marks it finished, so there is no per-submodule
+    granularity. PERSISTENCE is reported by the persistence shell
+    (services/audit.py), not by the engine, which never touches Mongo.
+
+    This is pipeline progress, not scoring: no number derives from it.
+    """
+
+    FETCH = "fetch"
+    TECH_STACK = "tech_stack"
+    TECHNICAL_ANALYSIS = "technical_analysis"  # technical + security + performance + schema_org
+    CONTENT_ANALYSIS = "content_analysis"  # keywords + citability
+    GATE_1 = "gate_1"
+    GATE_2 = "gate_2"
+    PERSISTENCE = "persistence"
 
 
 class Confidence(str, Enum):
@@ -86,6 +109,7 @@ class FetchResult(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     robots_txt: str | None = None
     sitemap_urls: list[str] = Field(default_factory=list)
+    lighthouse_raw: Optional[Dict[str, Any]] = None
     fetched_at: datetime
     notes: list[str] = Field(default_factory=list)
 
@@ -301,6 +325,8 @@ class AuditResult(BaseModel):
     keywords: KeywordsResult | None = None
     citability: CitabilityResult | None = None
     lead_viability: LeadViabilityResult | None = None
+    performance_runtime: Optional[Dict[str, Any]] = None
+    seo_runtime: Optional[Dict[str, Any]] = None
     # Gate 2 is computed whenever at least one category is available, regardless
     # of is_lead (task 8, punto 6); None only when every category is missing.
     weighted_score: WeightedScoreResult | None = None

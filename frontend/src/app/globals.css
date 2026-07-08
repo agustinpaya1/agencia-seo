@@ -1,8 +1,144 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* ===========================================================================
+   Theme strategy — light by default.
+
+   Selector-based dark mode, NOT prefers-color-scheme. The app ships light
+   (white background, no class on <html>); the `.dark` token block and the
+   `dark:` variant below are kept as infrastructure so a future toggle only
+   needs to add the class — no component rewrites, because components never
+   hardcode a theme. They consume the semantic surface tokens defined below
+   (bg-background, text-foreground, border-border, bg-card, ...), and the
+   :root / .dark blocks swap the underlying values.
+=========================================================================== */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ===========================================================================
+   Design tokens. Brand palette lives in CSS via @theme — NOT in a
+   tailwind.config.js — per the v4 convention.
+
+   The palette is deliberately reduced to one brand colour plus quiet support:
+     brand   — #1749FA, the only brand hue. Actions, links, focus rings,
+               active nav/kanban emphasis (e.g. the GEO score ring). Anchored
+               exactly at brand-600; the rest of the ramp is derived from it.
+     success — completed audits, active clients, positive feedback.
+     warning — in-progress ("auditing"), attention-needed states.
+     danger  — failed/unreachable audits, lost deals, destructive actions.
+   The three status ramps are intentionally desaturated (sage / ochre / brick
+   rather than emerald / amber / red) so they read as metadata and never
+   compete with the brand blue. Do not add further hues without documenting
+   their purpose here. Neutrals reuse Tailwind's built-in `slate` scale via
+   the semantic surface tokens below, so we don't duplicate a grey ramp.
+=========================================================================== */
+@theme {
+  /* brand — the one blue. 600 is exactly #1749FA. */
+  --color-brand-50: #f0f4ff;
+  --color-brand-100: #e0e8ff;
+  --color-brand-200: #c6d3ff;
+  --color-brand-300: #a0b5ff;
+  --color-brand-400: #7590ff;
+  --color-brand-500: #4467ff;
+  --color-brand-600: #1749fa;
+  --color-brand-700: #113ad4;
+  --color-brand-800: #1332a8;
+  --color-brand-900: #152e83;
+  --color-brand-950: #0f1d50;
+
+  /* success — desaturated sage green */
+  --color-success-50: #f3f7f4;
+  --color-success-100: #e2ece5;
+  --color-success-200: #c5d9cc;
+  --color-success-300: #9dbfa9;
+  --color-success-400: #72a184;
+  --color-success-500: #518668;
+  --color-success-600: #3e6c53;
+  --color-success-700: #345744;
+  --color-success-800: #2c4739;
+  --color-success-900: #263b30;
+  --color-success-950: #13211a;
+
+  /* warning — desaturated ochre */
+  --color-warning-50: #faf7ef;
+  --color-warning-100: #f3ecd7;
+  --color-warning-200: #e6d6ab;
+  --color-warning-300: #d6bb7c;
+  --color-warning-400: #c5a054;
+  --color-warning-500: #b3873c;
+  --color-warning-600: #996c2f;
+  --color-warning-700: #7a532a;
+  --color-warning-800: #644327;
+  --color-warning-900: #533823;
+  --color-warning-950: #2f1e10;
+
+  /* danger — desaturated brick red */
+  --color-danger-50: #fbf4f3;
+  --color-danger-100: #f5e4e2;
+  --color-danger-200: #edcbc8;
+  --color-danger-300: #dfa7a2;
+  --color-danger-400: #cc7b75;
+  --color-danger-500: #b65650;
+  --color-danger-600: #9c3f39;
+  --color-danger-700: #823431;
+  --color-danger-800: #6c2f2c;
+  --color-danger-900: #5a2b29;
+  --color-danger-950: #311412;
+
+  /* typography — Inter is loaded via next/font as var(--font-inter) */
+  --font-sans:
+    var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ---------------------------------------------------------------------------
+   Semantic surface tokens. These are the only colours structural components
+   should reference (bg-card, text-muted-foreground, border-border, ...). They
+   are swapped per theme here and registered as Tailwind utilities via
+   `@theme inline` so the generated classes point at the live CSS variable and
+   follow the .dark override at runtime.
+
+   Light surfaces: the page is pure white; cards/sidebar sit on --card, a
+   barely-off white (#f8f9fb — cool slate undertone so it harmonises with the
+   slate borders and the brand blue, ~2% darker than white so it reads as a
+   surface, not a grey box). --muted is nudged a step below slate-100 so
+   hover/inset states stay visible ON that off-white card surface.
+--------------------------------------------------------------------------- */
+:root {
+  --background: #ffffff;
+  --foreground: #0f172a; /* slate-900 */
+  --card: #f8f9fb; /* off-white surface (cards, sidebar, alternate sections) */
+  --card-foreground: #0f172a;
+  --muted: #eceff4; /* between slate-100/200 — visible step on --card */
+  --muted-foreground: #64748b; /* slate-500 */
+  --border: #e2e8f0; /* slate-200 */
+  --input: #e2e8f0;
+  --ring: #1749fa; /* brand-600 — focus always in the brand blue */
+}
+
+.dark {
+  --background: #020617; /* slate-950 */
+  --foreground: #e2e8f0; /* slate-200 */
+  --card: #0b1220; /* elevated navy panel */
+  --card-foreground: #f1f5f9; /* slate-100 */
+  --muted: #1e293b; /* slate-800 */
+  --muted-foreground: #94a3b8; /* slate-400 */
+  --border: #1e293b; /* slate-800 */
+  --input: #334155; /* slate-700 */
+  --ring: #7590ff; /* brand-400 — brighter on dark surfaces */
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}
 
 body {
-  background-color: #020617;
-  color: #e2e8f0;
+  background-color: var(--background);
+  color: var(--foreground);
 }

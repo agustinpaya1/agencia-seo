@@ -19,6 +19,7 @@ import asyncio
 from datetime import datetime, timezone
 
 from backend.app.audit_engine.models import (
+    AuditStage,
     CitabilityResult,
     Confidence,
     CwvSource,
@@ -568,6 +569,73 @@ class TestRunAuditShell:
         # 30*.35 + 10*.25 + 0*.20 + 20*.15 + 0*.05 = 10.5 + 2.5 + 0 + 3 + 0 = 16
         assert result.weighted_score.final_score == 16.0
         assert result.weighted_score.tier == ScoreTier.CRITICAL
+
+
+# --------------------------------------------------------------------------- #
+# on_stage progress reporting (UI timeline)
+# --------------------------------------------------------------------------- #
+def full_fakes():
+    """A complete passing fake set (happy path) for the stage tests."""
+    fakes, _ = make_fakes(
+        make_fetch(),
+        tech_stack=make_tech_stack(),
+        technical=make_technical(80),
+        security=make_security(all_headers=True),
+        performance=make_performance(),
+        schema=make_schema(70),
+        keywords=KeywordsResult(),
+        citability=make_citability(60),
+    )
+    return fakes
+
+
+class TestOnStageReporting:
+    def test_happy_path_reports_engine_stages_in_pipeline_order(self):
+        stages: list[AuditStage] = []
+
+        async def on_stage(stage):
+            stages.append(stage)
+
+        result = asyncio.run(run_audit("example.com", on_stage=on_stage, **full_fakes()))
+
+        # PERSISTENCE is deliberately absent: it belongs to the caller
+        # (services/audit.py), the engine never persists.
+        assert stages == [
+            AuditStage.FETCH,
+            AuditStage.TECH_STACK,
+            AuditStage.TECHNICAL_ANALYSIS,
+            AuditStage.CONTENT_ANALYSIS,
+            AuditStage.GATE_1,
+            AuditStage.GATE_2,
+        ]
+        assert result.errors == []
+
+    def test_unreachable_reports_only_fetch(self):
+        stages: list[AuditStage] = []
+
+        async def on_stage(stage):
+            stages.append(stage)
+
+        fakes, _ = make_fakes(make_fetch(reachability=Reachability.UNREACHABLE))
+        result = asyncio.run(run_audit("down.example", on_stage=on_stage, **fakes))
+
+        assert stages == [AuditStage.FETCH]
+        assert result.reachability == Reachability.UNREACHABLE
+
+    def test_broken_reporter_never_aborts_the_audit(self):
+        async def exploding(stage):
+            raise RuntimeError("mongo down")
+
+        result = asyncio.run(run_audit("example.com", on_stage=exploding, **full_fakes()))
+
+        # The audit itself is intact; every reporter failure is an errors line.
+        assert result.weighted_score is not None
+        assert result.lead_viability is not None
+        assert sum("on_stage" in e for e in result.errors) == 6
+
+    def test_no_reporter_is_the_default_noop(self):
+        result = asyncio.run(run_audit("example.com", **full_fakes()))
+        assert result.errors == []
 
 
 # --------------------------------------------------------------------------- #

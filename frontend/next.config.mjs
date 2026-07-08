@@ -1,10 +1,18 @@
+// @ts-check
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { NextConfig } from "next";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const nextConfig: NextConfig = {
+/**
+ * Plain ESM (.mjs) on purpose — do not convert back to next.config.ts: under
+ * Node 26, Next 16.2.9 compiles the .ts config to CJS but loads it as ESM
+ * ("exports is not defined in ES module scope"), which is fatal for
+ * `next build` and silently drops the config (no cacheComponents) in dev.
+ *
+ * @type {import("next").NextConfig}
+ */
+const nextConfig = {
   cacheComponents: true,
 
   // The root package-lock.json exists for the Lighthouse CLI used by

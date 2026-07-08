@@ -1,3 +1,5 @@
+import os
+
 from fastapi import Request
 
 from .services.persistence import leads_collection_name
@@ -22,3 +24,12 @@ def get_db(request: Request):
 
 def get_leads_collection(request: Request):
     return request.app.state.db[leads_collection_name()]
+
+
+def get_pagespeed_api_key() -> str | None:
+    """
+    Extrae la API key de Lighthouse del entorno.
+    Devuelve None si no está configurada, permitiendo que la app no crashee
+    (la API de Google permite algunas llamadas sin key, aunque con rate limit estricto).
+    """
+    return os.getenv("PAGESPEED_API_KEY")

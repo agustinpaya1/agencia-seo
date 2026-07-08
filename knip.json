@@ -15,7 +15,8 @@
         "src/app/**/not-found.tsx",
         "src/app/**/template.tsx",
         "src/app/**/default.tsx",
-        "next.config.ts",
+        "next.config.mjs",
+        "vitest.config.mts",
         "postcss.config.mjs"
       ]
     }

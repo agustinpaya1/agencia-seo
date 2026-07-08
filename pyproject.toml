@@ -29,11 +29,13 @@ build-backend = "poetry.core.masonry.api"
 entrypoint = "backend.app.main:app"
 
 [tool.pytest.ini_options]
-# tests/ mirrors the backend/app/ package tree; `.` makes `backend.app...`
-# importable. importlib mode lets two mirrored test files share a basename
-# (tests/services/test_audit.py vs tests/api/endpoints/test_audit.py) without
-# sprinkling __init__.py through tests/.
-testpaths = ["tests"]
+# tests/backend/ mirrors the backend/app/ package tree; `.` makes
+# `backend.app...` importable. (tests/frontend/ holds the Vitest suite and is
+# invisible to pytest.) importlib mode lets two mirrored test files share a
+# basename (tests/backend/services/test_audit.py vs
+# tests/backend/api/endpoints/test_audit.py) without sprinkling __init__.py
+# through tests/.
+testpaths = ["tests/backend"]
 pythonpath = ["."]
 addopts = "--import-mode=importlib"
 

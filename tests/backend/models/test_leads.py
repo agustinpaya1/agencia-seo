@@ -3,12 +3,25 @@
 The model must accept the *current* raw lead dict shape the endpoints
 already write (company/domain/status/geo_score/monthly_value/audit_date/notes)
 and additionally carry the denormalised audit-summary fields task 8 introduces.
+Also covers the pure validation helpers the endpoints delegate to:
+``parse_editable_status`` (kanban drag & drop / PUT status) and
+``parse_logo_url`` (media-card logo).
 """
 
 from datetime import datetime, timezone
 
-from backend.app.audit_engine.models import Reachability
-from backend.app.models.leads import AuditSummary, Lead, ManualFinding
+import pytest
+
+from backend.app.audit_engine.models import AuditStage, Reachability
+from backend.app.models.leads import (
+    EDITABLE_STATUSES,
+    AuditSummary,
+    Lead,
+    LeadStatus,
+    ManualFinding,
+    parse_editable_status,
+    parse_logo_url,
+)
 
 
 def test_lead_validates_current_dict_shape():
@@ -56,6 +69,57 @@ def test_audit_summary_fields_are_a_subset_of_lead():
     # Lead inherits AuditSummary, so the summary written back after an audit
     # is always a valid subset of the lead document.
     assert set(AuditSummary.model_fields) <= set(Lead.model_fields)
+
+
+def test_lead_carries_progress_and_logo_fields_with_safe_defaults():
+    lead = Lead(company="Example", domain="example.com")
+    assert lead.current_stage is None
+    assert lead.logo_url is None
+
+    lead = Lead(
+        company="Example",
+        domain="example.com",
+        current_stage="technical_analysis",  # raw string from Mongo -> coerced
+        logo_url="https://example.com/logo.png",
+    )
+    assert lead.current_stage is AuditStage.TECHNICAL_ANALYSIS
+    assert lead.logo_url == "https://example.com/logo.png"
+
+
+class TestParseEditableStatus:
+    @pytest.mark.parametrize("raw", [status.value for status in EDITABLE_STATUSES])
+    def test_accepts_every_editable_status(self, raw):
+        assert parse_editable_status(raw) is LeadStatus(raw)
+
+    def test_strips_whitespace(self):
+        assert parse_editable_status("  proposal  ") is LeadStatus.PROPOSAL
+
+    @pytest.mark.parametrize("raw", ["nonsense", "", "   "])
+    def test_rejects_values_outside_the_vocabulary(self, raw):
+        assert parse_editable_status(raw) is None
+
+    @pytest.mark.parametrize("raw", ["unreachable", "failed"])
+    def test_rejects_engine_owned_statuses(self, raw):
+        # They ARE valid LeadStatus values, but only the engine may set them —
+        # a drag & drop / manual PUT must never move a lead there.
+        assert LeadStatus(raw) is not None
+        assert parse_editable_status(raw) is None
+
+
+class TestParseLogoUrl:
+    def test_accepts_http_and_https_stripped(self):
+        assert parse_logo_url(" https://cdn.example.com/logo.png ") == (
+            "https://cdn.example.com/logo.png"
+        )
+        assert parse_logo_url("http://example.com/a.jpg") == "http://example.com/a.jpg"
+
+    def test_blank_clears_the_logo(self):
+        assert parse_logo_url("") == ""
+        assert parse_logo_url("   ") == ""
+
+    @pytest.mark.parametrize("raw", ["ftp://x/logo.png", "javascript:alert(1)", "logo.png"])
+    def test_rejects_non_http_schemes(self, raw):
+        assert parse_logo_url(raw) is None
 
 
 def test_manual_findings_default_empty_and_are_distinct_from_notes():

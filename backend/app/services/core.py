@@ -1,33 +1,14 @@
-import json
 from pathlib import Path
 
-CRM_PATH = Path.home() / ".geo-prospects" / "prospects.json"
-PROPOSALS_DIR = Path.home() / ".geo-prospects" / "proposals"
-AUDITS_DIR = Path.home() / ".geo-prospects" / "audits"
+# Pre-generated proposal PDFs live outside the repo, one file per lead domain.
+PROPOSALS_DIR = Path.home() / ".geo-leads" / "proposals"
 
 
 def init_dirs():
-    CRM_PATH.parent.mkdir(parents=True, exist_ok=True)
     PROPOSALS_DIR.mkdir(parents=True, exist_ok=True)
-    AUDITS_DIR.mkdir(parents=True, exist_ok=True)
-    if not CRM_PATH.exists():
-        with open(CRM_PATH, "w") as f:
-            json.dump([], f)
 
 
 init_dirs()
-
-
-def load_prospects() -> list[dict]:
-    if not CRM_PATH.exists():
-        return []
-    with open(CRM_PATH) as f:
-        return json.load(f)
-
-
-def save_prospects(prospects: list[dict]):
-    with open(CRM_PATH, "w") as f:
-        json.dump(prospects, f, indent=2, ensure_ascii=False)
 
 
 def score_tier(score: int) -> str:
@@ -40,13 +21,13 @@ def score_tier(score: int) -> str:
     return "critical"
 
 
-def crm_stats(prospects: list[dict]) -> dict:
-    total = len(prospects)
-    active = [p for p in prospects if p.get("status") == "active"]
-    proposals = [p for p in prospects if p.get("status") == "proposal"]
-    mrr = sum(p.get("monthly_value", 0) for p in active)
-    pipeline = sum(p.get("monthly_value", 0) for p in proposals)
-    avg_score = round(sum(p.get("geo_score", 0) for p in prospects) / total) if total else 0
+def crm_stats(leads: list[dict]) -> dict:
+    total = len(leads)
+    active = [lead for lead in leads if lead.get("status") == "active"]
+    proposals = [lead for lead in leads if lead.get("status") == "proposal"]
+    mrr = sum(lead.get("monthly_value", 0) for lead in active)
+    pipeline = sum(lead.get("monthly_value", 0) for lead in proposals)
+    avg_score = round(sum(lead.get("geo_score", 0) for lead in leads) / total) if total else 0
     return {
         "total": total,
         "active": len(active),
@@ -57,8 +38,8 @@ def crm_stats(prospects: list[dict]) -> dict:
     }
 
 
-def find_pdf(prospect: dict) -> Path | None:
-    domain = prospect.get("domain", "")
+def find_pdf(lead: dict) -> Path | None:
+    domain = lead.get("domain", "")
     for f in sorted(PROPOSALS_DIR.glob(f"{domain}*.pdf"), reverse=True):
         return f
     return None

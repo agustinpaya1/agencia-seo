@@ -20,6 +20,7 @@ from bson import ObjectId
 
 from backend.app.audit_engine.models import (
     AuditResult,
+    AuditStage,
     FetchResult,
     LeadViabilityResult,
     Reachability,
@@ -102,13 +103,21 @@ def make_audit(*, domain: str = "example.com", is_lead: bool = True, reachable: 
     )
 
 
-def make_runner(result=None, exc: Exception | None = None):
-    """A fake run_audit that records its call and returns/raises on demand."""
+def make_runner(result=None, exc: Exception | None = None, stages: list | None = None):
+    """A fake run_audit that records its call and returns/raises on demand.
+
+    ``stages`` (AuditStage values) are replayed through the injected
+    ``on_stage`` callback before returning, mimicking the real orchestrator's
+    progress reporting.
+    """
     calls: dict = {}
 
-    async def runner(domain, *, snapshot_store=None):
+    async def runner(domain, *, snapshot_store=None, on_stage=None, api_key=None):
         calls["domain"] = domain
         calls["snapshot_store"] = snapshot_store
+        calls["on_stage"] = on_stage
+        for stage in stages or []:
+            await on_stage(stage)
         if exc is not None:
             raise exc
         return result
@@ -163,6 +172,25 @@ class TestCompleted:
         lead = find_lead(db, lead_id)
         assert lead["status"] == STATUS_COMPLETED
         assert lead["is_lead"] is False
+
+    def test_progress_stages_are_persisted_on_the_lead(self):
+        # The runner reports stages through on_stage; each one must land on the
+        # lead as current_stage, and the shell itself must add PERSISTENCE
+        # before saving — the UI timeline reads exactly this field.
+        db = FakeDB()
+        lead_id = seed_lead(db)
+        runner, calls = make_runner(
+            make_audit(),
+            stages=[AuditStage.FETCH, AuditStage.TECH_STACK, AuditStage.GATE_2],
+        )
+
+        run(lead_id, db, runner)
+
+        assert calls["on_stage"] is not None  # the shell wired a reporter in
+        lead = find_lead(db, lead_id)
+        # Last write wins: the shell's own PERSISTENCE marker, after GATE_2.
+        assert lead["current_stage"] == AuditStage.PERSISTENCE.value
+        assert lead["status"] == STATUS_COMPLETED
 
     def test_injects_mongo_snapshot_store_over_snapshots_collection(self):
         # The whole point of 8b's snapshot wiring: the runner must receive the

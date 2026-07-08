@@ -68,7 +68,7 @@ CATEGORY_COLLECTIONS: dict[str, str] = {
 
 # The closed list of fetch fields that survive persistence. Everything else in
 # FetchResult (html, headers, robots_txt) is live-only input for the scorers.
-_FETCH_PERSISTED_FIELDS = {"status_code", "final_url", "sitemap_urls", "notes", "fetched_at"}
+_FETCH_PERSISTED_FIELDS = {"status_code", "final_url", "sitemap_urls", "notes", "fetched_at", "lighthouse_raw"}
 
 
 def leads_collection_name() -> str:

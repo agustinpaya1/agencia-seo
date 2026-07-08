@@ -8,7 +8,7 @@ these endpoints need it: ``find().sort().to_list()`` for the list endpoint and
 ``find_one_and_update`` with ``$push``/``$set`` + ``ReturnDocument.AFTER`` for
 note/status. ``services.core.PROPOSALS_DIR`` is monkeypatched to a tmp dir in
 every test so ``has_pdf``/the PDF endpoint never touch the real
-``~/.geo-prospects``.
+``~/.geo-leads``.
 """
 
 from types import SimpleNamespace
@@ -18,8 +18,9 @@ from bson import ObjectId
 from fastapi.testclient import TestClient
 
 import backend.app.services.core as core
-from backend.app.dependencies import get_leads_collection
+from backend.app.dependencies import get_db, get_leads_collection
 from backend.app.main import app
+from backend.app.services.persistence import AUDIT_RUNS_COLLECTION
 
 
 # --------------------------------------------------------------------------- #
@@ -78,13 +79,25 @@ def make_lead(**overrides) -> dict:
     return doc
 
 
+class FakeDB:
+    """Report endpoints read audit_runs/audit_reports_* through `db[...]`."""
+
+    def __init__(self) -> None:
+        self.collections: dict[str, FakeLeadsCollection] = {}
+
+    def __getitem__(self, name: str) -> FakeLeadsCollection:
+        return self.collections.setdefault(name, FakeLeadsCollection())
+
+
 @pytest.fixture()
 def harness(monkeypatch, tmp_path):
     leads = FakeLeadsCollection()
+    db = FakeDB()
     app.dependency_overrides[get_leads_collection] = lambda: leads
-    monkeypatch.setattr(core, "PROPOSALS_DIR", tmp_path)  # isolate from ~/.geo-prospects
+    app.dependency_overrides[get_db] = lambda: db
+    monkeypatch.setattr(core, "PROPOSALS_DIR", tmp_path)  # isolate from ~/.geo-leads
 
-    yield SimpleNamespace(client=TestClient(app), leads=leads, proposals_dir=tmp_path)
+    yield SimpleNamespace(client=TestClient(app), leads=leads, db=db, proposals_dir=tmp_path)
     app.dependency_overrides.clear()
 
 
@@ -168,6 +181,70 @@ class TestLeadDetail:
 
 
 # --------------------------------------------------------------------------- #
+# GET /api/leads/{lead_id}/report + /report.md
+# --------------------------------------------------------------------------- #
+def seed_audited_lead(harness) -> dict:
+    """A lead pointing at a minimal stored run (no category docs needed)."""
+    run_id = ObjectId()
+    lead = make_lead(last_audit_id=str(run_id))
+    harness.leads.docs.append(lead)
+    harness.db[AUDIT_RUNS_COLLECTION].docs.append(
+        {
+            "_id": run_id,
+            "domain": lead["domain"],
+            "reachability": "ok",
+            "reports": {},
+            "weighted_score": {"final_score": 72.5, "tier": "fair", "breakdown": []},
+            "lead_viability": {"is_lead": True, "reason": "test", "checked_dimensions": {}},
+            "errors": [],
+            "created_at": "2026-07-04T10:00:00",
+        }
+    )
+    return lead
+
+
+class TestLeadReport:
+    def test_invalid_object_id_is_400(self, harness):
+        assert harness.client.get("/api/leads/not-an-oid/report").status_code == 400
+
+    def test_unknown_lead_is_404(self, harness):
+        assert harness.client.get(f"/api/leads/{ObjectId()}/report").status_code == 404
+
+    def test_lead_without_audit_is_404(self, harness):
+        lead = make_lead()  # no last_audit_id
+        harness.leads.docs.append(lead)
+        assert harness.client.get(f"/api/leads/{lead['_id']}/report").status_code == 404
+
+    def test_returns_assembled_report(self, harness):
+        lead = seed_audited_lead(harness)
+
+        resp = harness.client.get(f"/api/leads/{lead['_id']}/report")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["lead"]["id"] == str(lead["_id"])
+        assert body["audit"]["id"] == lead["last_audit_id"]
+        assert body["score"]["final_score"] == 72.5
+        assert body["categories"] == {}
+
+    def test_markdown_download_sets_attachment_headers(self, harness):
+        lead = seed_audited_lead(harness)
+
+        resp = harness.client.get(f"/api/leads/{lead['_id']}/report.md")
+
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/markdown")
+        assert 'filename="informe-example.com.md"' in resp.headers["content-disposition"]
+        assert "# Informe de auditoría GEO — Example" in resp.text
+        assert "**72.5 / 100**" in resp.text
+
+    def test_markdown_without_audit_is_404(self, harness):
+        lead = make_lead()
+        harness.leads.docs.append(lead)
+        assert harness.client.get(f"/api/leads/{lead['_id']}/report.md").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
 # POST /api/leads/{lead_id}/note
 # --------------------------------------------------------------------------- #
 class TestAddLeadNote:
@@ -223,6 +300,50 @@ class TestUpdateLeadStatus:
 
     def test_unknown_lead_is_404(self, harness):
         resp = harness.client.put(f"/api/leads/{ObjectId()}/status", json={"status": "lead"})
+        assert resp.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# PUT /api/leads/{lead_id}/logo
+# --------------------------------------------------------------------------- #
+class TestUpdateLeadLogo:
+    def test_http_url_is_saved(self, harness):
+        lead = make_lead()
+        harness.leads.docs.append(lead)
+
+        resp = harness.client.put(
+            f"/api/leads/{lead['_id']}/logo",
+            json={"logo_url": "https://cdn.example.com/logo.png"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["logo_url"] == "https://cdn.example.com/logo.png"
+        assert harness.leads.docs[0]["logo_url"] == "https://cdn.example.com/logo.png"
+
+    def test_blank_clears_the_logo(self, harness):
+        lead = make_lead(logo_url="https://old.example.com/logo.png")
+        harness.leads.docs.append(lead)
+
+        resp = harness.client.put(f"/api/leads/{lead['_id']}/logo", json={"logo_url": "   "})
+
+        assert resp.status_code == 200
+        assert harness.leads.docs[0]["logo_url"] == ""
+
+    def test_non_http_scheme_is_400(self, harness):
+        lead = make_lead()
+        harness.leads.docs.append(lead)
+
+        resp = harness.client.put(
+            f"/api/leads/{lead['_id']}/logo", json={"logo_url": "javascript:alert(1)"}
+        )
+
+        assert resp.status_code == 400
+        assert "logo_url" not in harness.leads.docs[0]  # untouched
+
+    def test_unknown_lead_is_404(self, harness):
+        resp = harness.client.put(
+            f"/api/leads/{ObjectId()}/logo", json={"logo_url": "https://x.com/l.png"}
+        )
         assert resp.status_code == 404
 
 

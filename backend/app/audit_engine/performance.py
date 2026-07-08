@@ -36,7 +36,7 @@ import statistics
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 import requests
 from pydantic import BaseModel
@@ -438,3 +438,53 @@ def _crux_p75(metrics: dict, key: str) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+# --------------------------------------------------------------------------- #
+# Raw payload extraction
+# --------------------------------------------------------------------------- #
+def process_lighthouse_payload(raw_data: dict[str, Any]) -> dict[str, Any]:
+    """Extract strictly required performance and SEO nodes from Lighthouse payload.
+
+    Extracts:
+    * Core Web Vitals in Runtime (LCP, TBT, CLS, FCP)
+    * Opportunities and Financial Impact (uses-responsive-images, modern-image-formats)
+    * Critical SEO audits (document-image-alt)
+    """
+    if not raw_data:
+        return {"performance_runtime": {}, "seo_runtime": {}}
+
+    audits = raw_data.get("lighthouseResult", {}).get("audits", {})
+
+    def _numeric(key: str) -> float | None:
+        val = audits.get(key, {}).get("numericValue")
+        return float(val) if val is not None else None
+
+    def _savings(key: str) -> float | None:
+        val = audits.get(key, {}).get("details", {}).get("overallSavingsBytes")
+        return float(val) if val is not None else None
+
+    def _score(key: str) -> int | None:
+        val = audits.get(key, {}).get("score")
+        return int(val) if val is not None else None
+
+    lcp = _numeric("largest-contentful-paint")
+    fcp = _numeric("first-contentful-paint")
+
+    perf = {
+        "largest-contentful-paint": lcp / 1000.0 if lcp is not None else None,
+        "total-blocking-time": _numeric("total-blocking-time"),
+        "cumulative-layout-shift": _numeric("cumulative-layout-shift"),
+        "first-contentful-paint": fcp / 1000.0 if fcp is not None else None,
+        "uses-responsive-images": _savings("uses-responsive-images"),
+        "modern-image-formats": _savings("modern-image-formats"),
+    }
+
+    seo = {
+        "document-image-alt": _score("document-image-alt"),
+    }
+
+    return {
+        "performance_runtime": perf,
+        "seo_runtime": seo,
+    }
